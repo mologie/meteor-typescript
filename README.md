@@ -24,7 +24,7 @@ TypeScript is installed with this package. Once installed, Meteor will accept
 
 This package does not ship with any TypeScript definition files. I maintain a
 Meteor-specific TypeScript definitions library over at
-[typescript-libs](/mologie/meteor-typescript-libs). The
+[typescript-libs](//github.com/mologie/meteor-typescript-libs). The
 [DefinitelyTyped](http://definitelytyped.org) project is an excellent source
 for TypeScript definitions.
 
