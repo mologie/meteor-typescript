@@ -2,12 +2,6 @@
 // Copyright 2015 Oliver Kuckertz <oliver.kuckertz@mologie.de>
 // Refer to COPYING for license information.
 
-// Known issues:
-// - There is no dependency tracking for reference tracking due to limitations of Meteor's compileStep API.
-//   This affects other language plugins such as less and stylus too.
-//   Workaround: Restart Meteor if declaration files changed and affect your project files.
-// - Sloppy error handling for invalid references (will always display "file not found").
-
 var ts = Npm.require("typescript");
 var path = Npm.require("path");
 var fs = Npm.require("fs");
