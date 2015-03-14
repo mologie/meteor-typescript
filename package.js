@@ -1,7 +1,7 @@
 Package.describe({
 	name: "mologie:typescript",
 	summary: "TypeScript integration for Meteor",
-	version: "1.4.1"
+	version: "0.0.1"
 });
 
 Package.registerBuildPlugin({
