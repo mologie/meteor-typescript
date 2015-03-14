@@ -15,12 +15,12 @@ This package provides TypeScript support for Meteor.
 
 ## Usage
 
-Just install, that's it. TypeScript comes with this package. Once installed,
-Meteor will accept `.ts` files.
-
 ```
 meteor add mologie:typescript
 ```
+
+TypeScript is installed with this package. Once installed, Meteor will accept
+`.ts` files.
 
 This package does not ship with any TypeScript definition files. I maintain a
 Meteor-specific TypeScript definitions library over at
@@ -31,14 +31,8 @@ for TypeScript definitions.
 
 ## Known issues
 
-* There is no dependency tracking for reference tracking due to limitations of
-  Meteor's compileStep API. This affects other language plugins such as less
-  and stylus too. Workaround: Restart Meteor if declaration files changed and
-  affect your project files.
-
-* Sloppy error handling for invalid references (will always display "file not
-  found").
-
+* There is no dependency tracking for reference tracking due to limitations of Meteor's compileStep API. This affects other language plugins such as less and stylus too. Workaround: Restart Meteor if declaration files changed and affect your project files.
+* Sloppy error handling for invalid references (will always display "file not found").
 * There are no test cases yet.
 
 
