@@ -8,9 +8,10 @@ var fs = Npm.require("fs");
 
 function performStep(compileStep) {
     var files = {}; // virtual filesystem, written to by the compiler host
-    var references = []; // references recorded as files are processed
+    var references = []; // absolute paths of referenced files
     var rootPath = path.dirname(compileStep.fullInputPath); // used for resolving relative paths
     var relativeBasePath = path.dirname(compileStep.pathForSourceMap); // just what Meteor wants to hear
+    var inputFilePath = path.basename(compileStep.fullInputPath); // file to be compiled relative to rootPath
 
     // Meteor-compatible set of compiler options
     var compilerOptions = {
@@ -24,6 +25,9 @@ function performStep(compileStep) {
 
     // Synchronously reads a file as per request of the compiler host
     function readFile(filePath) {
+        if (filePath == inputFilePath) {
+            return compileStep.read().toString(compilerOptions.charset);
+        }
         filePath = path.resolve(rootPath, filePath);
         return fs.readFileSync(filePath, { encoding: compilerOptions.charset });
     }
@@ -40,24 +44,18 @@ function performStep(compileStep) {
     // TypeScript compiler host interface: Provides file system and environment abstraction
     var compilerHost = {
         getSourceFile: function (fileName, languageVersion) {
-            var source;
-            if (fileName == compileStep.inputPath) {
-                source = compileStep.read().toString(compilerOptions.charset);
+            try {
+                var source = readFile(fileName);
+                var sourceFile = ts.createSourceFile(fileName, source, languageVersion);
+                recordFileReferences(sourceFile);
+                return sourceFile;
             }
-            else {
-                try {
-                    source = readFile(fileName);
-                }
-                catch (e) {
-                    // We surely could complain here, but TypeScript already does its own error handling
-                    // if this method returns no value.
-                    // XXX This will confuse the user if we instead have no permission to read the file.
-                    return undefined;
-                }
+            catch (e) {
+                // We surely could complain here, but TypeScript already does its own error handling
+                // if this method returns no value.
+                // XXX This will confuse the user if we instead have no permission to read the file.
+                return undefined;
             }
-            var sourceFile = ts.createSourceFile(fileName, source, languageVersion);
-            recordFileReferences(sourceFile);
-            return sourceFile;
         },
         writeFile: function (name, text) {
             // Store contents in virtual filesystem dictionary
@@ -86,7 +84,7 @@ function performStep(compileStep) {
     };
 
     // Run TypeScript
-    var program = ts.createProgram([compileStep.inputPath], compilerOptions, compilerHost);
+    var program = ts.createProgram([inputFilePath], compilerOptions, compilerHost);
 
     // Test for fatal errors
     var errors = program.getDiagnostics();
@@ -129,7 +127,7 @@ function compileTypeScriptImpl(compileStep) {
 
     if (result.errors.length == 0) {
         // Build JavaScript file information for Meteor
-        var jsName = compileStep.inputPath.slice(0, -3) + ".js";
+        var jsName = path.basename(compileStep.inputPath, ".ts") + ".js";
         var js = {
             path: jsName,
             data: result.files[jsName],
