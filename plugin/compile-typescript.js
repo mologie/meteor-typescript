@@ -6,6 +6,26 @@ var ts = Npm.require("typescript");
 var path = Npm.require("path");
 var fs = Npm.require("fs");
 
+function postProcess(source) {
+    // This function modifies the TypeScript compiler's output so that all modules
+    // and classes declared in the top level scope are assigned to the package scope
+    // provided by Meteor. I will probably go to hell for this.
+    var beginModule = /^var .+;$/;
+    var beginClass = /^var (.+) = \(function \(\) {$/;
+    return _.map(source.split("\n"), function (line) {
+        var m;
+        if (m = line.match(beginModule)) {
+            return "";
+        }
+        else if (m = line.match(beginClass)) {
+            return m[1] + " = function () {";
+        }
+        else {
+            return line;
+        }
+    }).join("\n");
+}
+
 function performStep(compileStep) {
     var files = {}; // virtual filesystem, written to by the compiler host
     var references = []; // absolute paths of referenced files
@@ -58,8 +78,8 @@ function performStep(compileStep) {
             }
         },
         writeFile: function (name, text) {
-            // Store contents in virtual filesystem dictionary
-            files[name] = text;
+            // Post-process and store contents in virtual filesystem
+            files[name] = postProcess(text);
         },
         getDefaultLibFilename: function () {
             // This is quite a mess. Microsoft wants us to use require.resolve for retrieving the path
