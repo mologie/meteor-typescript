@@ -18,7 +18,7 @@ function postProcess(source) {
             return "";
         }
         else if (m = line.match(beginClass)) {
-            return m[1] + " = function () {";
+            return m[1] + " = (function () {";
         }
         else {
             return line;
