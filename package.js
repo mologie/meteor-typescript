@@ -5,11 +5,17 @@ Package.describe({
 	version: "0.0.3"
 });
 
+var meteorPackageList = [
+    "underscore@1.0.0"
+];
+
+var npmPackageList = {
+    "typescript": "1.4.1"
+};
+
 Package.registerBuildPlugin({
 	name: "compile-typescript",
-	use: ["underscore@1.0.0"],
+	use: meteorPackageList,
 	sources: ["plugin/compile-typescript.js"],
-	npmDependencies: {
-		"typescript": "1.4.1"
-	}
+	npmDependencies: npmPackageList
 });
