@@ -148,8 +148,9 @@ function compileTypeScriptImpl(compileStep) {
     if (result.errors.length == 0) {
         // Build JavaScript file information for Meteor
         var jsName = path.basename(compileStep.inputPath, ".ts") + ".js";
+        var jsNameForMeteor = path.join(path.dirname(compileStep.inputPath), jsName);
         var js = {
-            path: jsName,
+            path: jsNameForMeteor,
             data: result.files[jsName],
             sourcePath: compileStep.inputPath,
             sourceMap: result.files[jsName + ".map"]
