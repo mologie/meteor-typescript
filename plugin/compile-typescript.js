@@ -152,9 +152,12 @@ function postProcessForMeteor(fileName, source) {
 function meteorErrorFromCompilerError(compileStep, e) {
     if (e.file) {
         var pos = e.file.getLineAndCharacterFromPosition(e.start);
+        var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
+        var absPath = path.resolve(path.dirname(compileStep.fullInputPath), e.file.filename);
+        var packageFilePath = path.relative(packageBasePath, absPath);
         return {
             message: e.messageText,
-            sourcePath: e.file.filename,
+            sourcePath: packageFilePath,
             line: pos.line,
             column: pos.column
         };
