@@ -5,26 +5,158 @@
 var ts = Npm.require("typescript");
 var path = Npm.require("path");
 var fs = Npm.require("fs");
+var crypto = Npm.require("crypto");
+
+
+//
+// Global cache list
+//
+
+var _typeScriptCacheList = {};
+
+function typeScriptCacheForContext(context) {
+    // Build shared context ID
+    var md5 = crypto.createHash("md5");
+    md5.update(context.rootPath);
+    md5.update("_");
+    md5.update(context.mapBasePath);
+    md5.update("_");
+    md5.update(context.target);
+
+    var id = md5.digest("hex");
+
+    if (_typeScriptCacheList.hasOwnProperty(id)) {
+        // Get cache
+        return _typeScriptCacheList[id];
+    }
+    else {
+        // Create cache
+        var cache = new TypeScriptCache(context.rootPath, context.target);
+        _typeScriptCacheList[id] = cache;
+        return cache;
+    }
+}
+
+
+//
+// TypeScriptCache interface
+//
+
+function TypeScriptCache(rootPath, languageVersion) {
+    this.rootPath = rootPath;
+    this.languageVersion = languageVersion;
+    this._cache = {};
+}
+
+TypeScriptCache.prototype.getEntry = function (fileName) {
+    return this._cache[fileName];
+};
+
+TypeScriptCache.prototype.createEntry = function (fileName, fileHandle) {
+    var self = this;
+
+    // Compile source file
+    var sourceFile = ts.createSourceFile(fileName, fileHandle.source, this.languageVersion);
+
+    // Gather references
+    var references = _.map(sourceFile.referencedFiles, function (reference) {
+        var refFilePath = path.resolve(self.rootPath, fileName, "..", reference.filename);
+        return path.relative(self.rootPath, refFilePath);
+    });
+
+    // Create cache entry
+    var cacheEntry = {
+        sourceFile: sourceFile,
+        references: references,
+        stat: fileHandle.stat,
+        lastChanged: fileHandle.stat().mtime
+    };
+    this._cache[fileName] = cacheEntry;
+
+    return cacheEntry;
+};
+
+TypeScriptCache.prototype.drop = function (fileName) {
+    delete this._cache[fileName];
+};
+
+TypeScriptCache.prototype.validate = function (fileName) {
+    var self = this;
+
+    // Test if an entry exists
+    if (!this._cache.hasOwnProperty(fileName)) {
+        return false;
+    }
+
+    // Get the entry
+    var entry = this._cache[fileName];
+
+    // Test if the file timestamp changed
+    try {
+        // Compare timestamp
+        if (entry.stat().mtime.getTime() != entry.lastChanged.getTime()) {
+            return false;
+        }
+    }
+    catch (e) {
+        // Assume that file was deleted
+        return false;
+    }
+
+    // Recursively test if any reference changed
+    if (!entry.references.every(function (reference) {
+        return self.validate(reference);
+    })) {
+        return false;
+    }
+
+    // The file and its references are up-to-date
+    return true;
+};
+
+TypeScriptCache.prototype.getValidatedEntry = function (fileName, getSourceHandle) {
+    if (this.validate(fileName)) {
+        return this.getEntry(fileName).sourceFile;
+    }
+    else {
+        this.drop(fileName);
+        var fileHandle = getSourceHandle();
+        return fileHandle ? this.createEntry(fileName, fileHandle).sourceFile : undefined;
+    }
+};
+
+TypeScriptCache.prototype.compileWatchSet = function (fileName) {
+    var self = this;
+    var watchSet = [];
+    function extendWatchSet(entry) {
+        if (!entry || !entry.hasOwnProperty("references"))
+            return;
+        watchSet = _.union(watchSet, entry.references);
+        entry.references.forEach(function (referenceName) {
+            var nextEntry = self.getEntry(referenceName);
+            extendWatchSet(nextEntry);
+        });
+    }
+    extendWatchSet(this.getEntry(fileName));
+    return watchSet;
+};
+
+
+//
+// TypeScriptCompiler interface
+//
+// Performs compilation steps of a given context (root path, map base path, input files, target language)
+// Makes calls to the cache manager for optimization purposes.
+//
 
 function TypeScriptCompiler(context) {
     this._context = context;
-    this._preProcessors = [];
+    this._cache = typeScriptCacheForContext(context);
     this._postProcessors = [];
 }
 
-TypeScriptCompiler.prototype.addPreProcessor = function (preProcessor) {
-    this._preProcessors.push(preProcessor);
-};
-
 TypeScriptCompiler.prototype.addPostProcessor = function (postProcessor) {
     this._postProcessors.push(postProcessor);
-};
-
-TypeScriptCompiler.prototype._preProcess = function (fileName, source) {
-    this._preProcessors.forEach(function (preProcessor) {
-        source = preProcessor(fileName, source);
-    });
-    return source;
 };
 
 TypeScriptCompiler.prototype._postProcess = function (fileName, source) {
@@ -36,7 +168,6 @@ TypeScriptCompiler.prototype._postProcess = function (fileName, source) {
 
 TypeScriptCompiler.prototype.run = function () {
     var files = {}; // virtual filesystem, written to by the compiler host
-    var references = []; // absolute paths of referenced files
     var self = this;
 
     // Meteor-compatible set of compiler options
@@ -49,37 +180,28 @@ TypeScriptCompiler.prototype.run = function () {
         target: this._context.target
     };
 
-    // Synchronously reads a file as per request of the compiler host
-    function readFile(filePath) {
-        filePath = path.resolve(self._context.rootPath, filePath);
-        return fs.readFileSync(filePath, { encoding: compilerOptions.charset });
-    }
-
-    // Tracks references/dependencies of processed source files
-    function recordFileReferences(sourceFile) {
-        sourceFile.referencedFiles.forEach(function (referencedFile) {
-            var basePath = path.dirname(path.resolve(self._context.rootPath, sourceFile.filename));
-            var filePath = path.resolve(basePath, referencedFile.filename);
-            references.push(filePath);
-        });
+    // Builds a file handle for the cache manager
+    function makeFileHandle(fileName) {
+        var filePath = path.resolve(self._context.rootPath, fileName);
+        var source = fs.readFileSync(filePath, { encoding: compilerOptions.charset });
+        return {
+            source: source,
+            stat: function () { return fs.statSync(filePath); }
+        };
     }
 
     // TypeScript compiler host interface: Provides file system and environment abstraction
     var compilerHost = {
-        getSourceFile: function (fileName, languageVersion) {
-            try {
-                var source = readFile(fileName);
-                source = self._preProcess(fileName, source);
-                var sourceFile = ts.createSourceFile(fileName, source, languageVersion);
-                recordFileReferences(sourceFile);
-                return sourceFile;
-            }
-            catch (e) {
-                // We surely could complain here, but TypeScript already does its own error handling
-                // if this method returns no value.
-                // XXX This will confuse the user if we instead have no permission to read the file.
-                return undefined;
-            }
+        getSourceFile: function (fileName) {
+            // Get validated cache entry
+            return self._cache.getValidatedEntry(fileName, function () {
+                try {
+                    return makeFileHandle(fileName);
+                }
+                catch (e) {
+                    return undefined;
+                }
+            });
         },
         writeFile: function (fileName, source) {
             // Post-process and store contents in virtual filesystem
@@ -107,8 +229,16 @@ TypeScriptCompiler.prototype.run = function () {
         }
     };
 
+    // Fast lane: Skip type checking if file and its dependencies are unchanged
+    if (this._cache.validate(this._context.inputFile)) {
+        var cacheEntry = this._cache.getEntry(this._context.inputFile);
+        if (cacheEntry.hasOwnProperty("results")) {
+            return cacheEntry.results;
+        }
+    }
+
     // Run TypeScript
-    var program = ts.createProgram(this._context.inputFiles, compilerOptions, compilerHost);
+    var program = ts.createProgram([this._context.inputFile], compilerOptions, compilerHost);
 
     // Test for fatal errors
     var errors = program.getDiagnostics();
@@ -118,18 +248,37 @@ TypeScriptCompiler.prototype.run = function () {
         // Test for type errors
         var checker = program.getTypeChecker(true);
         errors = checker.getDiagnostics();
-
-        // Generate output regardless of type errors
-        checker.emitFiles();
     }
 
-    // Unclutter dependency list
-    references = _.unique(references);
+    // Continue only if no type checking errors occurred
+    if (!errors.length) {
+        // Generate output files
+        checker.emitFiles();
 
-    return { files: files, references: references, errors: errors };
+        // Generate watch set
+        var watchSet = this._cache.compileWatchSet(this._context.inputFile);
+
+        // Build and cache result set
+        var results = { files: files, watchSet: watchSet, errors: [] };
+        this._cache.getEntry(this._context.inputFile).results = results;
+
+        return results;
+    }
+    else {
+        return { files: [], watchSet: [], errors: errors };
+    }
 };
 
-function postProcessForMeteor(fileName, source) {
+
+//
+// Meteor-specific helper utilities
+//
+
+function meteorPostProcess(compileStep, fileName, source) {
+    // Only modify JavaScript output files
+    if (fileName.slice(-3) != ".js")
+        return source;
+
     // This function modifies the TypeScript compiler's output so that all modules
     // and classes declared in the top level scope are assigned to the package scope
     // provided by Meteor. I will probably go to hell for this.
@@ -138,26 +287,46 @@ function postProcessForMeteor(fileName, source) {
     return _.map(source.split("\n"), function (line) {
         var m;
         if (m = line.match(beginModule)) {
-            return "if (typeof " + m[1] + " === \"undefined\") " + m[1] + " = {};";
+            if (compileStep.declaredExports.indexOf(m[1]) != -1) {
+                // Exports have a package-scope var statement
+                return "";
+            }
+            else {
+                // Write to global scope
+                return "if (typeof " + m[1] + " === \"undefined\") " + m[1] + " = {};";
+            }
         }
         else if (m = line.match(beginClass)) {
+            // Does the right thing in both cases
             return m[1] + " = (function () {";
         }
         else {
+            // No change
             return line;
         }
     }).join("\n");
 }
 
+function meteorTypeScriptCompiler(compileStep) {
+    var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
+    var compiler = new TypeScriptCompiler({
+        rootPath: packageBasePath,
+        mapBasePath: path.dirname(compileStep.pathForSourceMap), // XXX
+        inputFile: compileStep.inputPath,
+        target: (compileStep.arch == "web.browser") ? "ES3" : "ES5"
+    });
+    compiler.addPostProcessor(function (fileName, source) {
+        return meteorPostProcess(compileStep, fileName, source);
+    });
+    return compiler;
+}
+
 function meteorErrorFromCompilerError(compileStep, e) {
     if (e.file) {
         var pos = e.file.getLineAndCharacterFromPosition(e.start);
-        var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
-        var absPath = path.resolve(path.dirname(compileStep.fullInputPath), e.file.filename);
-        var packageFilePath = path.relative(packageBasePath, absPath);
         return {
             message: e.messageText,
-            sourcePath: packageFilePath,
+            sourcePath: e.file.filename,
             line: pos.line,
             column: pos.column
         };
@@ -170,27 +339,15 @@ function meteorErrorFromCompilerError(compileStep, e) {
     }
 }
 
-TypeScriptCompiler.createFromCompileStep = function (compileStep) {
-    var compiler = new TypeScriptCompiler({
-        rootPath: path.dirname(compileStep.fullInputPath),
-        mapBasePath: path.dirname(compileStep.pathForSourceMap),
-        inputFiles: [path.basename(compileStep.fullInputPath)],
-        target: (compileStep.arch == "web.browser") ? "ES3" : "ES5"
-    });
-    compiler.addPostProcessor(postProcessForMeteor);
-    return compiler;
-};
-
-TypeScriptCompiler.registerResultWithBuilder = function (compileStep, result) {
+function registerResultWithBuilder(compileStep, result) {
     if (result.errors.length == 0) {
         // Build JavaScript file information for Meteor
-        var jsName = path.basename(compileStep.inputPath, ".ts") + ".js";
-        var jsNameForMeteor = path.join(path.dirname(compileStep.inputPath), jsName);
+        var jsPath = compileStep.inputPath.slice(0, -3) + ".js";
         var js = {
-            path: jsNameForMeteor,
-            data: result.files[jsName],
+            path: jsPath,
+            data: result.files[jsPath],
             sourcePath: compileStep.inputPath,
-            sourceMap: result.files[jsName + ".map"]
+            sourceMap: result.files[jsPath + ".map"]
         };
 
         // Sanity check
@@ -201,8 +358,7 @@ TypeScriptCompiler.registerResultWithBuilder = function (compileStep, result) {
         // Register compiled JavaScript file with Meteor
         compileStep.addJavaScript(js);
 
-        // XXX Register references with Meteor. There is no API for this yet.
-        // for each reference, compileStep.registerDependency(reference)
+        // XXX Register result.watchSet entries with Meteor. There is no API for this yet.
     }
     else {
         // Log all errors and do not register the results with Meteor
@@ -210,11 +366,16 @@ TypeScriptCompiler.registerResultWithBuilder = function (compileStep, result) {
             compileStep.error(meteorErrorFromCompilerError(compileStep, error));
         });
     }
-};
+}
+
+
+//
+// Meteor plugin registration
+//
 
 function compileTypeScriptImpl(compileStep) {
-    var result = TypeScriptCompiler.createFromCompileStep(compileStep).run();
-    TypeScriptCompiler.registerResultWithBuilder(compileStep, result);
+    var result = meteorTypeScriptCompiler(compileStep).run();
+    registerResultWithBuilder(compileStep, result);
 }
 
 function compileTypeScriptDef(compileStep) {

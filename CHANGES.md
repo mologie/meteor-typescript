@@ -1,5 +1,9 @@
 # ChangeLog
 
+### 0.0.6
+
+* Cache and reuse compilation results
+
 ### 0.0.5
 
 * Report consistent relative paths in error messages
