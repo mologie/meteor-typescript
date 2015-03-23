@@ -5,88 +5,27 @@
 var ts = Npm.require("typescript");
 var path = Npm.require("path");
 var fs = Npm.require("fs");
-var crypto = Npm.require("crypto");
 
 
 //
 // TSDocument interface
 //
 
-function TSDocument(name, propertyPackers) {
+function TSDocument(name, handle, version) {
     this.name = name;
-    this.nameOnDisk = crypto.createHash("md5").update(name).digest("hex") + TSDocument.fileExtension;
+    this.handle = handle;
+    this.lastVersion = version;
     this.references = [];
     this.properties = {};
-    this.lastVersion = false;
-    this.modified = false;
-    this.isEmpty = true;
-    this._propertiesEncoded = {};
-    this._propertyPackers = propertyPackers;
 }
-
-TSDocument.fileExtension = ".tscache";
-
-TSDocument.prototype._packProperty = function (propertyName, value) {
-    if (this._propertyPackers.hasOwnProperty(propertyName)) {
-        var packinfo = this._propertyPackers[propertyName];
-        return packinfo.pack(value);
-    }
-    else {
-        return value;
-    }
-};
-
-TSDocument.prototype._unpackProperty = function (propertyName, value) {
-    if (this._propertyPackers.hasOwnProperty(propertyName)) {
-        var packinfo = this._propertyPackers[propertyName];
-        return packinfo.unpack(value);
-    }
-    else {
-        return value;
-    }
-};
-
-TSDocument.prototype.importDiskDocument = function (diskDocument) {
-    var self = this;
-
-    this.references = diskDocument.references;
-    this.properties = unpackProperties(diskDocument.properties);
-    this._propertiesEncoded = diskDocument.properties;
-    this.lastVersion = diskDocument.lastVersion;
-    this.modified = false;
-    this.isEmpty = false;
-
-    function unpackProperties(properties) {
-        // Runs each property through an unpacker function registered for its name
-        var result = {};
-        Object.keys(properties).forEach(function (propertyName) {
-            result[propertyName] = self._unpackProperty(propertyName, properties[propertyName]);
-        });
-        return result;
-    }
-};
-
-TSDocument.prototype.toDiskDocument = function () {
-    return {
-        name: this.name,
-        references: this.references,
-        properties: this._propertiesEncoded,
-        lastVersion: this.lastVersion
-    };
-};
 
 TSDocument.prototype.reset = function () {
     this.references = [];
     this.properties = {};
-    this._propertiesEncoded = {};
-    this.modified = true;
-    this.isEmpty = true;
 };
 
 TSDocument.prototype.registerReference = function (referenceName) {
     this.references.push(referenceName);
-    this.modified = true;
-    this.isEmpty = false;
 };
 
 TSDocument.prototype.hasProperty = function (propertyName) {
@@ -108,13 +47,7 @@ TSDocument.prototype.getProperty = function (propertyName, buildPropertyValue) {
 };
 
 TSDocument.prototype.setProperty = function (propertyName, value) {
-    var encoded = this._packProperty(propertyName, value);
-    encoded = JSON.parse(JSON.stringify(encoded));
-
     this.properties[propertyName] = value;
-    this._propertiesEncoded[propertyName] = encoded;
-    this.modified = true;
-    this.isEmpty = false;
 };
 
 
@@ -122,9 +55,7 @@ TSDocument.prototype.setProperty = function (propertyName, value) {
 // TSDocumentCache interface
 //
 
-function TSDocumentCache(path) {
-    this._path = path;
-    this._propertyPackers = {};
+function TSDocumentCache() {
     this._cache = {};
 }
 
@@ -170,77 +101,6 @@ TSDocumentCache.prototype._validate = function (documentName) {
     return true;
 };
 
-TSDocumentCache.prototype.registerPropertyPacker = function (name, pack, unpack) {
-    this._propertyPackers[name] = {pack: pack, unpack: unpack};
-};
-
-TSDocumentCache.prototype.loadFromDisk = function (buildDocumentHandle) {
-    var self = this;
-
-    // Collect all files ending in ".tscache"
-    var files = fs.readdirSync(this._path).filter(function (name) {
-        return path.extname(name) == TSDocument.fileExtension;
-    });
-
-    files.forEach(function (fileName) {
-        // Read and decode each file
-        var filePath = path.resolve(self._path, fileName);
-        var diskDocument = JSON.parse(fs.readFileSync(filePath, {encoding: "utf8"}));
-
-        // Construct handle
-        var handle = buildDocumentHandle(diskDocument.name);
-
-        // Construct internal representation of document
-        var doc = new TSDocument(diskDocument.name, self._propertyPackers);
-        doc.importDiskDocument(diskDocument);
-        doc.handle = handle;
-
-        // Invalidate if needed
-        var currentVersion = handle.getVersion();
-        if (currentVersion === false) {
-            try { fs.unlinkSync(filePath); } catch (e) { }
-            return;
-        }
-        else if (currentVersion != doc.lastVersion) {
-            doc.reset();
-            doc.lastVersion = currentVersion;
-        }
-
-        // Store document
-        self._cache[doc.name] = doc;
-    });
-};
-
-TSDocumentCache.prototype.writeToDisk = function () {
-    var self = this;
-    var obsoleteDocuments = [];
-
-    for (var documentName in this._cache) {
-        if (!this._cache.hasOwnProperty(documentName))
-            continue;
-
-        var doc = this._cache[documentName];
-        var filePath = path.resolve(this._path, doc.nameOnDisk);
-
-        if (doc.isEmpty) {
-            // Remove from disk
-            try { fs.unlinkSync(filePath); } catch (e) { }
-            obsoleteDocuments.push(doc.name);
-        }
-        else if (doc.modified) {
-            // Write updated document to disk
-            var diskDocument = doc.toDiskDocument();
-            var contents = JSON.stringify(diskDocument);
-            fs.writeFileSync(filePath, contents, {encoding: "utf8"});
-            doc.modified = false;
-        }
-    }
-
-    obsoleteDocuments.forEach(function (documentName) {
-        self._drop(documentName);
-    });
-};
-
 TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHandle) {
     var self = this;
     var doc;
@@ -256,8 +116,17 @@ TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHan
             return false;
         }
 
-        doc = new TSDocument(documentName, self._propertyPackers);
-        doc.handle = buildDocumentHandle(documentName);
+        // Request handle and version
+        var handle = buildDocumentHandle(documentName);
+        var currentVersion = handle.getVersion();
+
+        // Forward error
+        if (currentVersion === false) {
+            return undefined;
+        }
+
+        doc = new TSDocument(documentName, handle, currentVersion);
+
         this._cache[documentName] = doc;
     }
 
@@ -271,6 +140,17 @@ TSDocumentCache.prototype.getDocumentWithoutValidation = function (documentName)
     else {
         return undefined;
     }
+};
+
+TSDocumentCache.prototype.cleanup = function () {
+    var self = this;
+    Object.keys(this._cache).forEach(function (documentName) {
+        self._validate(documentName);
+    });
+};
+
+TSDocumentCache.prototype.isEmpty = function () {
+    return Object.keys(this._cache).length == 0;
 };
 
 
@@ -300,16 +180,31 @@ TSCompiler.prototype.run = function () {
     var compilerOptions = self._context.options;
     var files = {}; // virtual filesystem, written to by the compiler host
 
-    // Resolves a file name
     function getFilePath(fileName) {
         return path.resolve(self._context.rootPath, fileName);
+    }
+
+    function createDocumentFileHandle(fileName) {
+        var filePath = getFilePath(fileName);
+        return {
+            // Returns an integer that, when changed, indicates a change in the file content
+            // Returns false for an invalid document
+            getVersion: function () {
+                try {
+                    return fs.statSync(filePath).mtime.getTime();
+                }
+                catch (e) {
+                    return false;
+                }
+            }
+        };
     }
 
     // TypeScript compiler host interface: Provides filesystem and environment abstraction
     var compilerHost = {
         getSourceFile: function (fileName) {
             // Get or update cache entry
-            var doc = self._documentCache.getDocument(fileName, self._context.createDocumentFileHandle);
+            var doc = self._documentCache.getDocument(fileName, createDocumentFileHandle);
 
             // Forward error
             if (!doc) {
@@ -328,7 +223,7 @@ TSCompiler.prototype.run = function () {
             // Register new references, if any
             if (haveUpdatedSourceFile) {
                 sourceFile.referencedFiles.forEach(function (reference) {
-                    // XXX TypeScript 1.5 changed reference's filename to fileName
+                    // XXX TypeScript 1.5 changes reference's filename to fileName
                     var filePath = path.resolve(self._context.rootPath, fileName, "..", reference.filename);
                     var filePackagePath = path.relative(self._context.rootPath, filePath);
                     doc.registerReference(filePackagePath);
@@ -452,27 +347,32 @@ function meteorErrorFromCompilerError(compileStep, e) {
 // Cache persistence
 //
 
-var _typeScriptCacheList = {};
-var _typeScriptCachePath = path.resolve(".meteor/local/typescript-cache");
+var _typeScriptCacheVersion = 1;
+var _typeScriptCacheList;
 
-function mkdirp(path) {
-    try {
-        fs.mkdirSync(path);
-    }
-    catch (e) {
-        if (e.code != "EEXIST") {
-            throw e;
-        }
-    }
-}
+(function initDocumentCache() {
+    // Meteor (rightfully, yet annoyingly) resets everything it can get its hands on when rebuilding.
+    // This plugin however must persist data across rebuilds in order to provide efficient output caching.
+    // As workaround, this plugin modifies Node's global process object to do its bidding. What a mess.
 
-function loadDocumentCache(compileStep, createDocumentFileHandle) {
-    // Select a cache identifier which fulfills the following criteria:
-    // - Is a valid directory name
-    // - Unique per TypeScript AST generator branch
-    // - Unique per package
-    // This causes lib.d.ts to be compiled multiple times (once for each package and target), but avoids
-    // common pitfalls such as the requirement to use absolute paths.
+    var shouldReset =
+        (typeof process.__typescript_cache === "undefined") ||
+        (process.__typescript_cache.version !== _typeScriptCacheVersion) ||
+        (process.env.hasOwnProperty("TYPESCRIPT_DISABLE_CACHE"));
+
+    if (shouldReset) {
+        process.__typescript_cache = {version: _typeScriptCacheVersion, caches: {}};
+    }
+
+    _typeScriptCacheList = process.__typescript_cache.caches;
+
+    performCacheMaintenance();
+})();
+
+function loadDocumentCache(compileStep) {
+    // Create a separate cache per source package and target architecture.
+    // This causes lib.d.ts to be compiled multiple redundantly (once for each package), but drastically
+    // simplifies this package's design by limiting dependency tracking to packages.
     var id = (compileStep.packageName ? ("package_" + sanitize(compileStep.packageName)) : "application")
         + "_" + sanitize(compileStep.arch);
 
@@ -482,11 +382,8 @@ function loadDocumentCache(compileStep, createDocumentFileHandle) {
     }
     else {
         // Create cache
-        var cachePath = path.join(_typeScriptCachePath, id);
-        mkdirp(cachePath);
-        var cache = new TSDocumentCache(cachePath);
-        //cache.registerPropertyPacker("ts-ast", freezeDrySourceFile, hydrateSourceFile);
-        //cache.loadFromDisk(createDocumentFileHandle);
+        console.log("XXXDBG creating cache ", id);
+        var cache = new TSDocumentCache();
         _typeScriptCacheList[id] = cache;
         return cache;
     }
@@ -494,55 +391,23 @@ function loadDocumentCache(compileStep, createDocumentFileHandle) {
     function sanitize(fileName) {
         return fileName.replace(/[^a-zA-Z0-9]/, "_");
     }
-
-    function freezeDrySourceFile(sourceFile) {
-        // Workaround for TypeScript 1.4: SourceFile is not serializable out-of-the-box.
-        // Fortunately, reconstructing the missing pieces is trivial.
-        // XXX TypeScript 1.5 explicitly supports serialization, thus making this workaround obsolete.
-        //sourceFile.getSyntacticDiagnostics();
-        return _.omit(sourceFile,
-            "getLineAndCharacterFromPosition",
-            "getPositionFromLineAndCharacter",
-            "getLineStarts",
-            "getSyntacticDiagnostics"
-        );
-    }
-
-    function hydrateSourceFile(partialSourceFile) {
-        // Instant Source Files! Just add water! These functions come directly from the
-        // TypeScript 1.4 source code, and were slightly modified to work with preprocessed data.
-        // XXX Remove with TypeScript 1.5
-        var sourceFile = _.clone(partialSourceFile);
-        var lineStarts;
-        var syntacticDiagnostics;
-        return _.extend(sourceFile, {
-            getLineAndCharacterFromSourcePosition: function (position) {
-                return ts.getLineAndCharacterOfPosition(sourceFile.getLineStarts(), position);
-            },
-            getPositionFromSourceLineAndCharacter: function (line, character) {
-                return ts.getPositionFromLineAndCharacter(sourceFile.getLineStarts(), line, character);
-            },
-            getLineStarts: function () {
-                return lineStarts || (lineStarts = ts.computeLineStarts(sourceFile.text));
-            },
-            getSyntacticDiagnostics: function () {
-                if (syntacticDiagnostics === undefined) {
-                    if (sourceFile.parseDiagnostics.length > 0) {
-                        syntacticDiagnostics = sourceFile.referenceDiagnostics.concat(sourceFile.parseDiagnostics);
-                    }
-                    else {
-                        syntacticDiagnostics = sourceFile.referenceDiagnostics.concat(sourceFile.grammarDiagnostics);
-                    }
-                }
-                return syntacticDiagnostics;
-            }
-        });
-    }
 }
 
-function initDocumentCache() {
-    // Ensure that the top-level cache directory exists
-    mkdirp(_typeScriptCachePath);
+function performCacheMaintenance() {
+    for (var cacheId in _typeScriptCacheList) {
+        if (!_typeScriptCacheList.hasOwnProperty(cacheId))
+            continue;
+
+        var cache = _typeScriptCacheList[cacheId];
+
+        // Revalidate all cached documents
+        cache.cleanup();
+
+        // Remove the cache if empty
+        if (cache.isEmpty()) {
+            delete _typeScriptCacheList[cacheId];
+        }
+    }
 }
 
 
@@ -556,7 +421,7 @@ function compileTypeScriptImpl(compileStep) {
     var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
 
     // Retrieve a cache instance
-    var documentCache = loadDocumentCache(compileStep, createDocumentFileHandle);
+    var documentCache = loadDocumentCache(compileStep);
     var doc = documentCache.getDocument(compileStep.inputPath);
     var js;
 
@@ -573,7 +438,6 @@ function compileTypeScriptImpl(compileStep) {
         // Meteor-compatible set of compiler options
         var compilerMapBasePath = path.dirname(compileStep.pathForSourceMap);
         var compilerContext = {
-            createDocumentFileHandle: createDocumentFileHandle,
             rootPath: packageBasePath,
             inputFile: compileStep.inputPath,
             options: {
@@ -627,8 +491,6 @@ function compileTypeScriptImpl(compileStep) {
         }
     }
 
-    //documentCache.writeToDisk();
-
     if (js) {
         // Register compiled JavaScript file with Meteor
         compileStep.addJavaScript(js);
@@ -637,22 +499,6 @@ function compileTypeScriptImpl(compileStep) {
         // The Less and Stylus plugin suffer from the same issue: Changed references do not
         // cause the build process to re-run.
         // Watch these plugins for changes and update this plugin when ready.
-    }
-
-    function createDocumentFileHandle(fileName) {
-        var filePath = path.resolve(packageBasePath, fileName);
-        return {
-            // Returns an integer that, when changed, indicates a change in the file content
-            // Returns false for an invalid document
-            getVersion: function () {
-                try {
-                    return fs.statSync(filePath).mtime.getTime();
-                }
-                catch (e) {
-                    return false;
-                }
-            }
-        };
     }
 }
 
