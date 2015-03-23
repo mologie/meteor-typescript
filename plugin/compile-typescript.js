@@ -58,7 +58,7 @@ TSDocumentCache.prototype._drop = function (documentName) {
     delete this._cache[documentName];
 };
 
-TSDocumentCache.prototype.validate = function (documentName, buildDocumentHandle) {
+TSDocumentCache.prototype._validate = function (documentName, buildDocumentHandle) {
     var self = this;
 
     // Test if the document exists
@@ -112,7 +112,7 @@ TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHan
     }
 
     if (validate) {
-        this.validate(documentName);
+        this._validate(documentName);
     }
 
     if (this._cache.hasOwnProperty(documentName)) {
@@ -123,7 +123,7 @@ TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHan
         if (!buildDocumentHandle)
             return undefined;
 
-        // Request handle and version
+        // Request handle
         var handle = buildDocumentHandle(documentName);
         if (!handle)
             return undefined;
@@ -143,7 +143,7 @@ TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHan
 TSDocumentCache.prototype.cleanup = function () {
     var self = this;
     Object.keys(this._cache).forEach(function (documentName) {
-        self.validate(documentName);
+        self._validate(documentName);
     });
 };
 
