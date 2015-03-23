@@ -2,7 +2,8 @@
 
 ### 0.0.6
 
-* Cache and reuse compilation results
+* Cache and reuse syntax tree and JavaScript output
+* Incrementally rebuild application if referenced files change
 
 ### 0.0.5
 
