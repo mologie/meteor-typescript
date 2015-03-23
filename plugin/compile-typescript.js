@@ -2,30 +2,25 @@
 // Copyright 2015 Oliver Kuckertz <oliver.kuckertz@mologie.de>
 // Refer to COPYING for license information.
 
-var ts = Npm.require("typescript");
-var path = Npm.require("path");
-var fs = Npm.require("fs");
+var ts,
+    path = Npm.require("path"),
+    fs = Npm.require("fs");
 
 
 //
 // TSDocument interface
 //
 
-function TSDocument(name, handle, version) {
+function TSDocument(name, handle) {
     this.name = name;
     this.handle = handle;
-    this.lastVersion = version;
-    this.references = [];
-    this.properties = {};
+    this.reset();
 }
 
 TSDocument.prototype.reset = function () {
-    this.references = [];
+    this.references = {};
     this.properties = {};
-};
-
-TSDocument.prototype.registerReference = function (referenceName) {
-    this.references.push(referenceName);
+    this.lastVersion = this.handle.getVersion();
 };
 
 TSDocument.prototype.hasProperty = function (propertyName) {
@@ -63,7 +58,7 @@ TSDocumentCache.prototype._drop = function (documentName) {
     delete this._cache[documentName];
 };
 
-TSDocumentCache.prototype._validate = function (documentName) {
+TSDocumentCache.prototype.validate = function (documentName, buildDocumentHandle) {
     var self = this;
 
     // Test if the document exists
@@ -84,14 +79,11 @@ TSDocumentCache.prototype._validate = function (documentName) {
     else if (currentVersion != doc.lastVersion) {
         // Document source changed
         doc.reset();
-        doc.lastVersion = currentVersion;
         return false;
     }
 
-    // Recursively test if any reference changed
-    if (!doc.references.every(function (referenceName) {
-        return self._validate(referenceName);
-    })) {
+    // Recursively test if any references changed
+    if (!Object.keys(doc.references).every(validateReference)) {
         // At least one referenced document changed
         doc.reset();
         return false;
@@ -99,53 +91,59 @@ TSDocumentCache.prototype._validate = function (documentName) {
 
     // The document and its dependencies are up-to-date
     return true;
+
+    function validateReference(referenceName) {
+        var ref = self.getDocument(referenceName);
+        if (ref) {
+            return ref.lastVersion == doc.references[referenceName];
+        }
+        else {
+            return false;
+        }
+    }
 };
 
-TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHandle) {
+TSDocumentCache.prototype.getDocument = function (documentName, buildDocumentHandle, validate) {
     var self = this;
     var doc;
 
-    this._validate(documentName);
+    if (validate === undefined) {
+        validate = true;
+    }
+
+    if (validate) {
+        this.validate(documentName);
+    }
 
     if (this._cache.hasOwnProperty(documentName)) {
         doc = this._cache[documentName];
     }
     else {
         // Fail if no handle factory was provided
-        if (!buildDocumentHandle) {
-            return false;
-        }
+        if (!buildDocumentHandle)
+            return undefined;
 
         // Request handle and version
         var handle = buildDocumentHandle(documentName);
-        var currentVersion = handle.getVersion();
-
-        // Forward error
-        if (currentVersion === false) {
+        if (!handle)
             return undefined;
-        }
 
-        doc = new TSDocument(documentName, handle, currentVersion);
+        // Create document
+        doc = new TSDocument(documentName, handle);
+        if (doc.lastVersion === false)
+            return undefined;
 
+        // Store document
         this._cache[documentName] = doc;
     }
 
     return doc;
 };
 
-TSDocumentCache.prototype.getDocumentWithoutValidation = function (documentName) {
-    if (this._cache.hasOwnProperty(documentName)) {
-        return this._cache[documentName];
-    }
-    else {
-        return undefined;
-    }
-};
-
 TSDocumentCache.prototype.cleanup = function () {
     var self = this;
     Object.keys(this._cache).forEach(function (documentName) {
-        self._validate(documentName);
+        self.validate(documentName);
     });
 };
 
@@ -180,57 +178,11 @@ TSCompiler.prototype.run = function () {
     var compilerOptions = self._context.options;
     var files = {}; // virtual filesystem, written to by the compiler host
 
-    function getFilePath(fileName) {
-        return path.resolve(self._context.rootPath, fileName);
-    }
-
-    function createDocumentFileHandle(fileName) {
-        var filePath = getFilePath(fileName);
-        return {
-            // Returns an integer that, when changed, indicates a change in the file content
-            // Returns false for an invalid document
-            getVersion: function () {
-                try {
-                    return fs.statSync(filePath).mtime.getTime();
-                }
-                catch (e) {
-                    return false;
-                }
-            }
-        };
-    }
-
     // TypeScript compiler host interface: Provides filesystem and environment abstraction
     var compilerHost = {
         getSourceFile: function (fileName) {
-            // Get or update cache entry
-            var doc = self._documentCache.getDocument(fileName, createDocumentFileHandle);
-
-            // Forward error
-            if (!doc) {
-                return undefined;
-            }
-
-            // Get AST using cached source text
-            var haveUpdatedSourceFile = false;
-            var sourceFile = doc.getProperty("ts-ast", function () {
-                haveUpdatedSourceFile = true;
-                var filePath = getFilePath(fileName);
-                var source = fs.readFileSync(filePath, { encoding: compilerOptions.charset });
-                return ts.createSourceFile(fileName, source, this.languageVersion);
-            });
-
-            // Register new references, if any
-            if (haveUpdatedSourceFile) {
-                sourceFile.referencedFiles.forEach(function (reference) {
-                    // XXX TypeScript 1.5 changes reference's filename to fileName
-                    var filePath = path.resolve(self._context.rootPath, fileName, "..", reference.filename);
-                    var filePackagePath = path.relative(self._context.rootPath, filePath);
-                    doc.registerReference(filePackagePath);
-                });
-            }
-
-            return sourceFile;
+            // This is where the magic happens
+            return loadSourceFileFromCache(fileName);
         },
         writeFile: function (fileName, source) {
             // Post-process and store in virtual filesystem
@@ -284,12 +236,93 @@ TSCompiler.prototype.run = function () {
     else {
         return { files: [], errors: errors };
     }
+
+    function loadSourceFileFromCache(fileName) {
+        var doc = loadFromCache(fileName);
+        if (!doc)
+            return undefined;
+        return doc.getProperty("ts-ast");
+    }
+
+    function loadFromCache(fileName, _referenceList) {
+        // Get or update cache entry
+        var doc = self._documentCache.getDocument(fileName, createDocumentFileHandle);
+        if (!doc)
+            return undefined;
+
+        // Get cached syntax tree
+        var haveUpdatedSourceFile = false;
+        var sourceFile = doc.getProperty("ts-ast", function () {
+            haveUpdatedSourceFile = true;
+            var filePath = getFilePath(fileName);
+            var source = fs.readFileSync(filePath, { encoding: compilerOptions.charset });
+            return ts.createSourceFile(fileName, source, this.languageVersion);
+        });
+
+        // Update references recursively if needed
+        if (haveUpdatedSourceFile) {
+            var references = {};
+
+            sourceFile.referencedFiles.forEach(function (reference) {
+                var referenceAbsPath = path.resolve(self._context.rootPath, fileName, "..", reference.filename);
+                var referenceName = path.relative(self._context.rootPath, referenceAbsPath);
+
+                // Parse referenced file recursively and store version
+                var ref = loadFromCache(referenceName, references);
+                if (ref) {
+                    references[referenceName] = ref.lastVersion;
+                }
+                else {
+                    // The referenced file probably does not exist. Always rebuild.
+                    references[referenceName] = false;
+                    debugLog("file", fileName, "contains reference invalid file", referenceName, "(as " + reference.filename + ")");
+                }
+            });
+
+            // Register references with document cache
+            doc.references = references;
+
+            // Add to parent's list
+            if (_referenceList)
+                _.extend(_referenceList, references);
+        }
+
+        return doc;
+    }
+
+    function createDocumentFileHandle(fileName) {
+        var filePath = getFilePath(fileName);
+        return {
+            // Returns an integer that, when changed, indicates a change in the file content
+            // Returns false for an invalid document
+            getVersion: function () {
+                try {
+                    return fs.statSync(filePath).mtime.getTime();
+                }
+                catch (e) {
+                    return false;
+                }
+            }
+        };
+    }
+
+    function getFilePath(fileName) {
+        return path.resolve(self._context.rootPath, fileName);
+    }
 };
 
 
 //
 // Meteor-specific helper utilities
 //
+
+function debugLog() {
+    if (!process.env.hasOwnProperty("TYPESCRIPT_DEBUG"))
+        return;
+    var prefix = ["[TypeScript Debug]"];
+    var args = Array.prototype.slice.call(arguments);
+    console.log.apply(null, prefix.concat(args));
+}
 
 function meteorPostProcess(compileStep, fileName, source) {
     // Only modify JavaScript output files
@@ -361,11 +394,37 @@ var _typeScriptCacheList;
         (process.env.hasOwnProperty("TYPESCRIPT_DISABLE_CACHE"));
 
     if (shouldReset) {
-        process.__typescript_cache = {version: _typeScriptCacheVersion, caches: {}};
+        process.__typescript_cache = {
+            version: _typeScriptCacheVersion,
+            caches: {},
+            ts: Npm.require("typescript")
+        };
     }
 
     _typeScriptCacheList = process.__typescript_cache.caches;
+    ts = process.__typescript_cache.ts;
 
+    if (shouldReset) {
+        // Nothing to do, the cache is empty
+        return;
+    }
+
+    // In order to aid debugging across rebuilds and make the garbage collector happy, replace the
+    // prototype of all existing cache structures to point to this object's new, potentially modified prototype.
+    // The only information that remains from the previous run are document handles, which should be fine.
+    Object.keys(_typeScriptCacheList).forEach(function (cacheId) {
+        var documentCache = _typeScriptCacheList[cacheId];
+
+        // Update TSDocumentCache objects
+        documentCache.__proto__ = TSDocumentCache.prototype;
+
+        // Update TSDocument objects
+        Object.keys(documentCache._cache).forEach(function (documentId) {
+            documentCache._cache[documentId].__proto__ = TSDocument.prototype;
+        });
+    });
+
+    // Finally, remove any invalid documents
     performCacheMaintenance();
 })();
 
@@ -382,7 +441,6 @@ function loadDocumentCache(compileStep) {
     }
     else {
         // Create cache
-        console.log("XXXDBG creating cache ", id);
         var cache = new TSDocumentCache();
         _typeScriptCacheList[id] = cache;
         return cache;
@@ -416,6 +474,8 @@ function performCacheMaintenance() {
 //
 
 function compileTypeScriptImpl(compileStep) {
+    var prefix = makeDebugPrefix();
+
     // Absolute path to the current package or application root.
     // This is a tiny bit ugly.
     var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
@@ -428,12 +488,13 @@ function compileTypeScriptImpl(compileStep) {
     // Test if results have been cached for the current compile step
     if (doc && doc.hasProperty("meteor-js")) {
         // Fast lane! Use the cached result
+        debugLog(prefix, "using cached result");
         js = doc.getProperty("meteor-js");
     }
     else {
         // Slow route: Compile the file, have the compiler add its references to the
         // AST cache, and add the Meteor result to the JS cache.
-        console.log("XXXDBG recompiling: " + compileStep.inputPath);
+        debugLog(prefix, "rebuilding");
 
         // Meteor-compatible set of compiler options
         var compilerMapBasePath = path.dirname(compileStep.pathForSourceMap);
@@ -478,7 +539,7 @@ function compileTypeScriptImpl(compileStep) {
             }
 
             // Register result with document cache
-            var newdoc = documentCache.getDocumentWithoutValidation(compileStep.inputPath);
+            var newdoc = documentCache.getDocument(compileStep.inputPath, null, false);
             if (newdoc) {
                 newdoc.setProperty("meteor-js", js);
             }
@@ -494,11 +555,11 @@ function compileTypeScriptImpl(compileStep) {
     if (js) {
         // Register compiled JavaScript file with Meteor
         compileStep.addJavaScript(js);
+    }
 
-        // XXX Register result.watchSet entries with Meteor. There is no API for this yet.
-        // The Less and Stylus plugin suffer from the same issue: Changed references do not
-        // cause the build process to re-run.
-        // Watch these plugins for changes and update this plugin when ready.
+    function makeDebugPrefix() {
+        var pkgname = compileStep.packageName ? compileStep.packageName : "application";
+        return pkgname + " for " + compileStep.arch + ", file " + compileStep.inputPath + ":";
     }
 }
 
