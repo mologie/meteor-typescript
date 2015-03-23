@@ -3,7 +3,7 @@ TypeScript for Meteor
 
 > [TypeScript](http://www.typescriptlang.org/) is a language for application-scale JavaScript. TypeScript adds optional types, classes, and modules to JavaScript. TypeScript supports tools for large-scale JavaScript applications for any browser, for any host, on any OS. TypeScript compiles to readable, standards-based JavaScript.
 
-This package provides TypeScript support for Meteor. It features various caching mechasnisms which enable fast incremental builds.
+This package provides TypeScript support for Meteor. It features various caching mechanisms which enable fast incremental builds.
 
 *Bundled TypeScript version: 1.4.1*
 
