@@ -39,6 +39,7 @@ This package does not ship with any TypeScript definition files. I maintain a Me
 Known issues
 ------------
 
+* Changing a referenced file which is not part of your package or application does not trigger recompilation.
 * The error handling for invalid references is sloppy. It will always display a "file not found" error.
 * There are no test cases yet.
 
