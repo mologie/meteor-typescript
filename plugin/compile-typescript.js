@@ -58,8 +58,9 @@ TSDocumentCache.prototype._drop = function (documentName) {
     delete this._cache[documentName];
 };
 
-TSDocumentCache.prototype._validate = function (documentName, buildDocumentHandle) {
+TSDocumentCache.prototype._validate = function (documentName, _validatedFiles) {
     var self = this;
+    var validatedFiles = _validatedFiles || {};
 
     // Test if the document exists
     if (!this._cache.hasOwnProperty(documentName)) {
@@ -93,7 +94,16 @@ TSDocumentCache.prototype._validate = function (documentName, buildDocumentHandl
     return true;
 
     function validateReference(referenceName) {
-        var ref = self.getDocument(referenceName);
+        // Break reference cycles
+        if (validatedFiles.hasOwnProperty(referenceName))
+            return true;
+        validatedFiles[referenceName] = true;
+
+        // Validate file
+        self._validate(referenceName, validatedFiles);
+
+        // Validate file version
+        var ref = self.getDocument(referenceName, null, false);
         if (ref) {
             return ref.lastVersion == doc.references[referenceName];
         }
@@ -278,6 +288,9 @@ TSCompiler.prototype.run = function () {
                     debugLog("file", fileName, "contains reference invalid file", referenceName, "(as " + reference.filename + ")");
                 }
             });
+
+            // Removing implicit references to self
+            delete references[fileName];
 
             // Register references with document cache
             doc.references = references;
