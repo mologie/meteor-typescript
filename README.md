@@ -28,7 +28,6 @@ Here are a few simple rules to make things play nicely with Meteor:
 * Do not use the `export` or `import` keyword in the top-level scope.
 * All moduels and classes (but not variables) declared in the top-level scope are automatically exported to the package/application scope.
 * Variables can be exported to the package/application scope by declaring them as part of the global context through TypeScript's `declare` keyword.
-* Avoid cyclic references.
 * There are no implicit references. You must manually reference all files which your source file depends on.
 
 ### TypeScript definitions
