@@ -216,7 +216,7 @@ TSCompiler.prototype.run = function () {
             return self._context.rootPath;
         },
         getNewLine: function () {
-            return "\n";
+            return ts.sys.newLine;
         }
     };
 
@@ -347,7 +347,7 @@ function meteorPostProcess(compileStep, fileName, source) {
     // provided by Meteor. I will probably go to hell for this.
     var beginModule = /^var (.+);$/;
     var beginClass = /^var (.+) = \(function \(\) {$/;
-    return _.map(source.split("\n"), function (line) {
+    return _.map(source.split(ts.sys.newLine), function (line) {
         var m;
         if (m = line.match(beginModule)) {
             if (compileStep.declaredExports.indexOf(m[1]) != -1) {
@@ -367,7 +367,7 @@ function meteorPostProcess(compileStep, fileName, source) {
             // No change
             return line;
         }
-    }).join("\n");
+    }).join(ts.sys.newLine);
 }
 
 function meteorErrorFromCompilerError(compileStep, e) {
