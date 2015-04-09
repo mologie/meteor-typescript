@@ -535,15 +535,18 @@ function compileTypeScriptImpl(compileStep) {
 
         // Test for errors
         if (compilerResult.errors.length == 0) {
-            // Expected output file name
+            // Output file name for Meteor
             var jsPath = compileStep.inputPath.slice(0, -3) + ".js";
+
+            // Output file name for TypeScript
+            var compilerOutputPath = jsPath.split(path.sep).join("/");
 
             // Build JavaScript file information for Meteor
             js = {
                 path: jsPath,
-                data: compilerResult.files[jsPath],
+                data: compilerResult.files[compilerOutputPath],
                 sourcePath: compileStep.inputPath,
-                sourceMap: compilerResult.files[jsPath + ".map"]
+                sourceMap: compilerResult.files[compilerOutputPath + ".map"]
             };
 
             // Sanity check
