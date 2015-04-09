@@ -1,5 +1,9 @@
 # ChangeLog
 
+### 0.0.9
+
+* Incremental builds now work correctly on Windows
+
 ### 0.0.8
 
 * Support for Windows
