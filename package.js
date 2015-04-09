@@ -2,7 +2,7 @@ Package.describe({
 	name: "mologie:typescript",
 	summary: "TypeScript integration for Meteor",
 	git: "https://github.com/mologie/meteor-typescript.git",
-	version: "0.0.7"
+	version: "0.0.8"
 });
 
 var meteorPackageList = [
