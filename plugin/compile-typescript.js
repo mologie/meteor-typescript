@@ -237,7 +237,8 @@ TSCompiler.prototype.run = function () {
     if (!errors.length) {
         // Generate output files (including redundant/unused referenced files)
         // XXX TypeScript 1.5 changed the API and allows emitting single files. This removes overhead:
-        // var ast = self._documentCache.getDocumentWithoutValidation(this._context.inputFile).getProperty("ts-ast");
+        // var ast = self._documentCache.getDocument(this._context.inputFile, null, false);
+        // var ast = doc.getProperty("ts-ast");
         // program.emit(ast);
         checker.emitFiles();
 
@@ -275,7 +276,7 @@ TSCompiler.prototype.run = function () {
 
             sourceFile.referencedFiles.forEach(function (reference) {
                 var referenceAbsPath = path.resolve(self._context.rootPath, fileName, "..", reference.filename);
-                var referenceName = path.relative(self._context.rootPath, referenceAbsPath);
+                var referenceName = normalizePath(path.relative(self._context.rootPath, referenceAbsPath));
 
                 // Parse referenced file recursively and store version
                 var ref = loadFromCache(referenceName, references);
@@ -326,16 +327,8 @@ TSCompiler.prototype.run = function () {
 
 
 //
-// Meteor-specific helper utilities
+// Meteor-specific helpers
 //
-
-function debugLog() {
-    if (!process.env.hasOwnProperty("TYPESCRIPT_DEBUG"))
-        return;
-    var prefix = ["[TypeScript Debug]"];
-    var args = Array.prototype.slice.call(arguments);
-    console.log.apply(null, prefix.concat(args));
-}
 
 function meteorPostProcess(compileStep, fileName, source) {
     // Only modify JavaScript output files
@@ -386,6 +379,26 @@ function meteorErrorFromCompilerError(compileStep, e) {
             sourcePath: compileStep.inputPath
         };
     }
+}
+
+
+//
+// Utility functions
+//
+
+function debugLog() {
+    if (!process.env.hasOwnProperty("TYPESCRIPT_DEBUG"))
+        return;
+    var prefix = ["[TypeScript Debug]"];
+    var args = Array.prototype.slice.call(arguments);
+    console.log.apply(null, prefix.concat(args));
+}
+
+function normalizePath(fileName) {
+    if (path.sep == "/")
+        return fileName;
+    else
+        return fileName.split(path.sep).join("/");
 }
 
 
@@ -487,27 +500,26 @@ function performCacheMaintenance() {
 //
 
 function compileTypeScriptImpl(compileStep) {
-    var prefix = makeDebugPrefix();
-
     // Absolute path to the current package or application root.
     // This is a tiny bit ugly.
     var packageBasePath = compileStep.fullInputPath.slice(0, -1 * compileStep.inputPath.length);
 
     // Retrieve a cache instance
+    var compilerInputPath = normalizePath(compileStep.inputPath);
     var documentCache = loadDocumentCache(compileStep);
-    var doc = documentCache.getDocument(compileStep.inputPath);
+    var doc = documentCache.getDocument(compilerInputPath);
     var js;
 
     // Test if results have been cached for the current compile step
     if (doc && doc.hasProperty("meteor-js")) {
         // Fast lane! Use the cached result
-        debugLog(prefix, "using cached result");
+        debugLog(makeDebugPrefix(), "using cached result");
         js = doc.getProperty("meteor-js");
     }
     else {
         // Slow route: Compile the file, have the compiler add its references to the
         // AST cache, and add the Meteor result to the JS cache.
-        debugLog(prefix, "rebuilding");
+        debugLog(makeDebugPrefix(), "rebuilding");
 
         // Meteor-compatible set of compiler options
         var compilerMapBasePath = path.dirname(compileStep.pathForSourceMap);
@@ -538,14 +550,14 @@ function compileTypeScriptImpl(compileStep) {
             // Output file name for Meteor
             var jsPath = compileStep.inputPath.slice(0, -3) + ".js";
 
-            // Output file name for TypeScript
-            var compilerOutputPath = jsPath.split(path.sep).join("/");
+            // Output file name from TypeScript
+            var compilerOutputPath = normalizePath(jsPath);
 
             // Build JavaScript file information for Meteor
             js = {
                 path: jsPath,
                 data: compilerResult.files[compilerOutputPath],
-                sourcePath: compileStep.inputPath,
+                sourcePath: compilerInputPath,
                 sourceMap: compilerResult.files[compilerOutputPath + ".map"]
             };
 
@@ -555,7 +567,7 @@ function compileTypeScriptImpl(compileStep) {
             }
 
             // Register result with document cache
-            var newdoc = documentCache.getDocument(compileStep.inputPath, null, false);
+            var newdoc = documentCache.getDocument(compilerInputPath, null, false);
             if (newdoc) {
                 newdoc.setProperty("meteor-js", js);
             }
