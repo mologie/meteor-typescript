@@ -1,5 +1,13 @@
 # ChangeLog
 
+### 0.0.8
+
+* Support for Windows
+
+### 0.0.7
+
+* Fix crash when encountering circular reference
+
 ### 0.0.6
 
 * Cache and reuse syntax tree and JavaScript output
