@@ -207,10 +207,10 @@ TSCompiler.prototype.run = function () {
             return path.join(tsdir, "lib.d.ts");
         },
         useCaseSensitiveFileNames: function () {
-            return true;
+            return ts.sys.useCaseSensitiveFileNames;
         },
         getCanonicalFileName: function (fileName) {
-            return fileName;
+            return ts.sys.useCaseSensitiveFileNames ? fileName : fileName.toLowerCase();
         },
         getCurrentDirectory: function () {
             return self._context.rootPath;
