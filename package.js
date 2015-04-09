@@ -2,7 +2,7 @@ Package.describe({
 	name: "mologie:typescript",
 	summary: "TypeScript 1.4.1 with incremental compilation and Windows support",
 	git: "https://github.com/mologie/meteor-typescript.git",
-	version: "0.0.8"
+	version: "0.0.9"
 });
 
 var meteorPackageList = [
