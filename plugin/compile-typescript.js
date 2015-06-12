@@ -338,7 +338,7 @@ function meteorPostProcess(compileStep, fileName, source) {
     // This function modifies the TypeScript compiler's output so that all modules
     // and classes declared in the top level scope are assigned to the package scope
     // provided by Meteor. I will probably go to hell for this.
-    var beginModule = /^var (.+);$/;
+    var beginModule = /^var ([^ ]+);$/;
     var beginClass = /^var (.+) = \(function \(\) {$/;
     return _.map(source.split(ts.sys.newLine), function (line) {
         var m;
