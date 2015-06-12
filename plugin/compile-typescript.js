@@ -592,8 +592,15 @@ function compileTypeScriptImpl(compileStep) {
 }
 
 function compileTypeScriptDef(compileStep) {
-    // Do nothing. TypeScript definition files produce no code.
+    // Ensure that a rebuild is triggered when a bundled definition file changes
+    // by registering an empty source file which references the on-disk definition file.
     // Error checking happens when the definition file is referenced.
+    var compilerInputPath = normalizePath(compileStep.inputPath);
+    compileStep.addJavaScript({
+        path: compilerInputPath + ".js",
+        data: "",
+        sourcePath: compilerInputPath
+    });
 }
 
 Plugin.registerSourceHandler("ts", compileTypeScriptImpl);
