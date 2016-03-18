@@ -3,8 +3,6 @@
 // Refer to COPYING for license information.
 
 // TODO:
-// allow defining application-wide typings via tsconfig.json
-// select ES3 for browser and ES5 for node 0.10
 // implement serializing/deserializing document cache
 // write/test export support
 // write tests
@@ -16,12 +14,16 @@
 var fs = Plugin.fs;
 var path = Plugin.path;
 var ts = Npm.require("typescript");
-var crypto = require("crypto");
+var crypto = Npm.require("crypto");
 var _ = Npm.require("lodash");
 
 class TSCompiler {
     constructor() {
-        // Shared cache for the lifetime of this object
+        // User's configuration, updated with each build
+        this.tsconfigOptions = {};
+        this.tsconfigFiles = [];
+
+        // Shared cache
         this.archCache = {};
         this.documentRegistry = ts.createDocumentRegistry();
     }
@@ -44,6 +46,39 @@ class TSCompiler {
     }
 
     processFilesForTarget(inputFiles) {
+        // Grab and evaluate tsconfig.json from the application root
+        // Embedded package will inherit settings from the application's tsconfig.json
+        let configFiles = inputFiles.filter(TSCompiler.isConfigFile);
+        if (configFiles.length > 0) {
+            let configFile = configFiles[0];
+            let configText = configFile.getContentsAsString();
+            let loadResult = ts.parseConfigFileTextToJson("tsconfig.json", configText);
+
+            if (loadResult.error) {
+                let e = loadResult.error;
+                let message = ts.flattenDiagnosticMessageText(e.messageText, "\n");
+                let { line, character } = e.file.getLineAndCharacterOfPosition(e.start);
+                configFile.error({
+                    message: message,
+                    line: line,
+                    column: character
+                });
+            }
+            else if (loadResult.config) {
+                let tsconfig = loadResult.config;
+
+                if (tsconfig.compilerOptions) {
+                    this.tsconfigOptions = ts.convertCompilerOptionsFromJson(
+                        ts.optionDeclarations, tsconfig.compilerOptions);
+                }
+
+                if (tsconfig.files) {
+                    // XXX It may cause trouble to allow the user to load arbitrary files here
+                    this.tsconfigFiles = tsconfig.files;
+                }
+            }
+        }
+
         // Process each architecture
         let filesPerArch = _.groupBy(inputFiles, (file) => file.getArch());
         for (let arch of Object.keys(filesPerArch)) {
@@ -84,7 +119,7 @@ class TSCompiler {
         }
 
         // Collect files which need compiling
-        var rootFiles = [];
+        var rootFiles = [].concat(this.tsconfigFiles);
         inputFiles.forEach((file) => {
             if (!TSCompiler.isDefinitionFile(file) && !TSCompiler.isConfigFile(file)) {
                 rootFiles.push(filePrefix + file.getPathInPackage());
@@ -215,36 +250,12 @@ class TSCompiler {
         }
 
         function loadPackageConfig() {
-            // Load TypeScript built-in defaults
-            let options = ts.getDefaultCompilerOptions();
-
-            // Load some reasonable defaults for Meteor applications
-            _.assign(options, {
+            let suggestedOptions = {
                 charset: "utf8",
                 preverseConstEnums: true
-            })
+            };
 
-            // Load compilerOptions object from user's tsconfig.json file
-            let configFile = inputFiles.filter(TSCompiler.isConfigFile);
-            if (configFile.length > 0) {
-                let configJson = ts.parseConfigFileTextToJson(
-                    configFile[0].getPathInPackage(),
-                    configFile[0].getContentsAsString()
-                );
-
-                if (configJson.error) {
-                    logError(userConfig.error);
-                }
-                else if (configJson.config) {
-                    let json = configJson.config;
-                    let compilerOptions = ts.convertCompilerOptionsFromJson(
-                        ts.optionDeclarations, json.compilerOptions);
-                    _.assign(options, compilerOptions);
-                }
-            }
-
-            // Enforced package or Meteor-specific options
-            _.assign(options, {
+            let enforcedOptions = {
                 declaration: false,
                 diagnostics: true,
                 emitBOM: false,
@@ -259,9 +270,15 @@ class TSCompiler {
                 out: undefined,
                 outFile: undefined,
                 target: (packageArch == "web.browser") ? ts.ScriptTarget.ES3 : ts.ScriptTarget.ES5
-            });
+            };
 
-            return config;
+            return _.assign(
+                {},
+                ts.getDefaultCompilerOptions(),
+                suggestedOptions,
+                this.tsconfigOptions,
+                enforcedOptions
+            );
         }
 
         function findScript(fileName) {

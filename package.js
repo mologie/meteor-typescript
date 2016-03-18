@@ -4,7 +4,7 @@
 
 var npmPackageList = {
     "typescript": "1.8.9",
-    "lodash": "^4.6.1"
+    "lodash": "4.6.1"
 };
 
 var meteorPackageList = [
