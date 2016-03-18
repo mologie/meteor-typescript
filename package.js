@@ -3,13 +3,13 @@
 // Refer to COPYING for license information.
 
 var npmPackageList = {
-    "typescript": "1.8.9"
+    "typescript": "1.8.9",
+    "lodash": "^4.6.1"
 };
 
 var meteorPackageList = [
-    "ecmascript@0.1.6",
     "isobuild:compiler-plugin@1.0.0",
-    "caching-compiler@1.0.0",
+    "ecmascript@0.1.6",
     "underscore@1.0.0"
 ];
 

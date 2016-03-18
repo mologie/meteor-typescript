@@ -3,29 +3,24 @@
 // Refer to COPYING for license information.
 
 // TODO:
-// tsconfig.json support
+// allow defining application-wide typings via tsconfig.json
 // select ES3 for browser and ES5 for node 0.10
-// allow defining application-wide typings
 // implement serializing/deserializing document cache
 // write/test export support
 // write tests
-// update readme
+// update readme, explain how this is not the big other typescript compiler plugin
+//  faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
+//  file types (TS, JS), source map support
 // update changelog
 
 var fs = Plugin.fs;
 var path = Plugin.path;
 var ts = Npm.require("typescript");
+var crypto = require("crypto");
+var _ = Npm.require("lodash");
 
 class TSCompiler {
     constructor() {
-        // Default TypeScript compiler options if no tsconfig.json file is found
-        // From https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API
-        this.defaultOptions = {
-            noEmitOnError: true,
-            noImplicitAny: true,
-            module: ts.ModuleKind.CommonJS
-        };
-
         // Shared cache for the lifetime of this object
         this.archCache = {};
         this.documentRegistry = ts.createDocumentRegistry();
@@ -52,8 +47,9 @@ class TSCompiler {
         // Process each architecture
         let filesPerArch = _.groupBy(inputFiles, (file) => file.getArch());
         for (let arch of Object.keys(filesPerArch)) {
-            if (!(arch in this.archCache))
+            if (!(arch in this.archCache)) {
                 this.archCache[arch] = {};
+            }
             this.processFilesForArch(arch, this.archCache[arch], filesPerArch[arch]);
         }
 
@@ -67,8 +63,9 @@ class TSCompiler {
         // of embedded packages changes.
         let filesPerPackage = _.groupBy(inputFiles, (file) => file.getPackageName() || "");
         for (let packageName of Object.keys(filesPerPackage)) {
-            if (!(packageName in archCache))
+            if (!(packageName in archCache)) {
                 archCache[packageName] = {};
+            }
             this.processFilesForPackage(packageName, archCache[packageName], arch,
                 filesPerPackage[packageName]);
         }
@@ -82,23 +79,25 @@ class TSCompiler {
         // - Name conflicts between package files and application files are avoided.
         let buildingEmbeddedPackage = fs.existsSync("packages/" + packageName);
         var filePrefix = "";
-        if (buildingEmbeddedPackage)
+        if (buildingEmbeddedPackage) {
             filePrefix = "packages/" + packageName + "/";
+        }
 
         // Collect files which need compiling
         var rootFiles = [];
         inputFiles.forEach((file) => {
-            if (!TSCompiler.isDefinitionFile(file) && !TSCompiler.isConfigFile(file))
+            if (!TSCompiler.isDefinitionFile(file) && !TSCompiler.isConfigFile(file)) {
                 rootFiles.push(filePrefix + file.getPathInPackage());
+            }
         });
 
         // Create file index
-        var filesByPath = _.indexBy(inputFiles, (file) => filePrefix + file.getPathInPackage());
+        var filesByPath = _.keyBy(inputFiles, (file) => filePrefix + file.getPathInPackage());
 
         // Process configuration
         // Syntax change test taken from TypeScript's src/services/services.ts
         var oldSettings = packageCache.program && packageCache.program.getCompilerOptions();
-        var newSettings = this.defaultOptions; // TODO use tsconfig.json
+        var newSettings = loadPackageConfig();
         var newSettingsChangeSyntax = oldSettings &&
             (oldSettings.target !== newSettings.target ||
              oldSettings.module !== newSettings.module ||
@@ -109,10 +108,8 @@ class TSCompiler {
         var compilerOutput = {};
         var compilerHost = {
             getSourceFile: (fileName) => {
-                console.log("getSourceFilePath " + fileName);
                 let script = findScript(fileName);
                 if (!script) {
-                    console.log("bailing out");
                     return undefined;
                 }
 
@@ -163,8 +160,9 @@ class TSCompiler {
 
             readFile: (fileName) => {
                 // Check the Meteor-provided file list first
-                if (filesByPath[fileName])
+                if (filesByPath[fileName]) {
                     return filesByPath[fileName].getContentsAsString();
+                }
 
                 // Fall back to reading relative to the working directory, whereever that is
                 return fs.readFileSync(filePath, {encoding: "utf8"});
@@ -197,10 +195,112 @@ class TSCompiler {
         let allDiagnostics = ts.getPreEmitDiagnostics(newProgram).concat(emitResult.diagnostics);
 
         // Complain if there are any errors
-        // Small inconvenience: Meteor wants us to assign errors to inputFile objects, but that's
-        // really not always possible. TypeScript files may reference arbitrary files on the file
-        // system, or those in the packages/ directory. Throw an ugly error in such cases.
-        allDiagnostics.forEach((e) => {
+        allDiagnostics.forEach(logError);
+
+        // Register compiler output with Meteor
+        for (fileName of rootFiles) {
+            let compiledFileName = fileName.splice(0, -3) + ".js";
+            let sourceMapFileName = compiledFileName + ".map";
+            let inputFile = filesByPath[fileName];
+
+            if (!compilerOutput[compiledFileName]) {
+                continue;
+            }
+
+            inputFile.addJavaScript({
+                bare: true,
+                data: compilerOutput[compiledFileName],
+                sourceMap: compilerOutput[sourceMapFileName]
+            });
+        }
+
+        function loadPackageConfig() {
+            // Load TypeScript built-in defaults
+            let options = ts.getDefaultCompilerOptions();
+
+            // Load some reasonable defaults for Meteor applications
+            _.assign(options, {
+                charset: "utf8",
+                preverseConstEnums: true
+            })
+
+            // Load compilerOptions object from user's tsconfig.json file
+            let configFile = inputFiles.filter(TSCompiler.isConfigFile);
+            if (configFile.length > 0) {
+                let configJson = ts.parseConfigFileTextToJson(
+                    configFile[0].getPathInPackage(),
+                    configFile[0].getContentsAsString()
+                );
+
+                if (configJson.error) {
+                    logError(userConfig.error);
+                }
+                else if (configJson.config) {
+                    let json = configJson.config;
+                    let compilerOptions = ts.convertCompilerOptionsFromJson(
+                        ts.optionDeclarations, json.compilerOptions);
+                    _.assign(options, compilerOptions);
+                }
+            }
+
+            // Enforced package or Meteor-specific options
+            _.assign(options, {
+                declaration: false,
+                diagnostics: true,
+                emitBOM: false,
+                inlineSourceMap: false,
+                inlineSources: false,
+                mapRoot: filePrefix,
+                module: ts.ModuleKind.CommonJS,
+                sourceMap: true,
+                noEmit: false,
+                noEmitHelpers: false,
+                noEmitOnError: true,
+                out: undefined,
+                outFile: undefined,
+                target: (packageArch == "web.browser") ? ts.ScriptTarget.ES3 : ts.ScriptTarget.ES5
+            });
+
+            return config;
+        }
+
+        function findScript(fileName) {
+            let meteorFile = filesByPath[fileName];
+            let contents;
+
+            if (meteorFile) {
+                // Use Meteor-provided script
+                contents = meteorFile.getContentsAsString();
+            }
+            else {
+                // Generate script data from disk
+                // This part is required for reading through packages/ of Meteor applications.
+                try {
+                    // XXX Cache the result of readFileSync until processFilesForTarget returns
+                    contents = fs.readFileSync(fileName, {encoding: "utf8"});
+                }
+                catch (e) {
+                    // XXX Test for ENOENT and throw otherwise?
+                    return undefined;
+                }
+            }
+
+            // Use a custom checksum for synchronization of the Meteor file cache and of files read
+            // from disk on demand. We unfortunately cannot rely on meteorFile.getSourceHash()
+            // because its algorithm is not documented.
+            let version = crypto.createHash("sha1").update(contents).digest("hex");
+
+            return {
+                snapshot: ts.ScriptSnapshot.fromString(contents),
+                version: version
+            };
+        }
+
+        function logError(e) {
+            // Small inconvenience: Meteor wants us to assign errors to inputFile objects, but
+            // that's really not always possible. TypeScript files may reference arbitrary files on
+            // the file system, or those in the packages/ directory. Throw an ugly error in such
+            // cases.
             let message = ts.flattenDiagnosticMessageText(e.messageText, "\n");
             if (e.file) {
                 let { line, character } = e.file.getLineAndCharacterOfPosition(e.start);
@@ -219,52 +319,6 @@ class TSCompiler {
             }
             else {
                 throw Error(`TypeScript error while compiling package ${packageName}: ${message}`);
-            }
-        });
-
-        // Register compiler output with Meteor
-        for (fileName of rootFiles) {
-            let compiledFileName = fileName.splice(0, -3) + ".js";
-            let sourceMapFileName = compiledFileName + ".map";
-            let inputFile = filesByPath[fileName];
-
-            if (!compilerOutput[compiledFileName])
-                continue;
-
-            inputFile.addJavaScript({
-                bare: true,
-                data: compilerOutput[compiledFileName],
-                sourceMap: compilerOutput[sourceMapFileName]
-            });
-        }
-
-        function findScript(fileName) {
-            let meteorFile = filesByPath[fileName];
-            if (meteorFile) {
-                // Return script data from Meteor
-                return {
-                    snapshot: ts.ScriptSnapshot.fromString(meteorFile.getContentsAsString()),
-                    version: meteorFile.getSourceHash()
-                };
-            }
-            else {
-                // Generate script data from disk
-                // This part is required for reading through packages/ of Meteor applications.
-                try {
-                    // XXX Racing condition: fs.statSync should be replaced by fs.fstatSync with a
-                    // file handle, but file handles are not supported by Meteor's file system API
-                    // wrapper yet.
-                    let fileContents = fs.readFileSync(fileName, {encoding: "utf8"});
-                    let fileStat = fs.statSync(fileName);
-                    return {
-                        snapshot: ts.ScriptSnapshot.fromString(fileContents),
-                        version: fileStat.mtime.toString()
-                    };
-                }
-                catch (e) {
-                    // XXX Test for ENOENT and throw otherwise?
-                    return undefined;
-                }
             }
         }
     }
