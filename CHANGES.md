@@ -1,15 +1,23 @@
-# ChangeLog
+# Version table
+
+| Meteor        | TypeScript | Use compiler |
+| ------------- | ---------- | ------------ |
+| 1.2.0+        | 1.8.9      | 1.0.0        |
+| 0.9 - 1.2.0   | 1.4.1      | 0.0.9        |
+
+# Changes
 
 ### 1.0.0 (TypeScript 1.8.9)
 
 * Rewrite for Meteor 1.2 build API
-* Use TypeScript 1.8
-* Use SystemJS (via `universe:modules`)
-* Support configuration via `tsconfig.json`
+* Uses TypeScript 1.8
+* Uses SystemJS (via `universe:modules`)
+* Support for `tsconfig.json`
 
 Breaking changes:
 
 * [TypeScript breaking changes](https://github.com/Microsoft/TypeScript/wiki/Breaking-Changes#typescript-18)
+* Migration from module exports to SystemJS is required
 
 ### 0.0.9 (TypeScript 1.4.1)
 

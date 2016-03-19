@@ -8,7 +8,6 @@
 //  - faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
 //    file types (TS, JS), source map support
 //  - document that export = null is required for switching to local scope mode
-// update changelog
 
 var fs     = Plugin.fs;
 var path   = Plugin.path;
