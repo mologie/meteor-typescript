@@ -15,8 +15,7 @@ var meteorPackageList = [
 
 Package.describe({
     name: "mologie:typescript",
-    summary: "Minimalistic, battle-tested TypeScript integration for Meteor"
-        + " (TypeScript " + npmPackageList["typescript"] + ")",
+    summary: "TypeScript integration for Meteor (TypeScript " + npmPackageList["typescript"] + ")",
     git: "https://github.com/mologie/meteor-typescript.git",
     version: "1.0.0"
 });
@@ -24,6 +23,8 @@ Package.describe({
 Package.onUse(function (api) {
     api.versionsFrom("METEOR@1.2.0.1");
     api.use(meteorPackageList);
+    api.use("universe:modules", {weak: true});
+    api.imply("universe:modules");
 });
 
 Package.registerBuildPlugin({

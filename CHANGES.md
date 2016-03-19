@@ -3,8 +3,9 @@
 ### 1.0.0 (TypeScript 1.8.9)
 
 * Rewrite for Meteor 1.2 build API
-* Support for TypeScript 1.8
-* Support for configuration via `tsconfig.json`
+* Use TypeScript 1.8
+* Use SystemJS (via `universe:modules`)
+* Support configuration via `tsconfig.json`
 
 Breaking changes:
 

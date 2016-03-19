@@ -3,13 +3,15 @@
 // Refer to COPYING for license information.
 
 // TODO:
-// implement serializing/deserializing document cache
+// read the compiler output and figure out how well it integrates with Meteor
+//  do we need bare=true? i say yes, because TypeScript does its own clusure thing
 // write/test export support
-// write tests
 // update readme, explain how this is not the big other typescript compiler plugin
 //  faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
 //  file types (TS, JS), source map support
+// document that export = null is required for switching to local scope mode
 // update changelog
+// implement serializing/deserializing document cache
 
 var fs = Plugin.fs;
 var path = Plugin.path;
@@ -257,16 +259,41 @@ class TSCompiler {
 
             inputFile.addJavaScript({
                 bare: true,
-                data: compilerOutput[compiledFileName],
-                sourceMap: compilerOutput[sourceMapFileName],
+                data: postProcessJs(inputFile, compilerOutput[compiledFileName]),
+                sourceMap: postProcessSourceMap(inputFile, compilerOutput[sourceMapFileName]),
                 path: meteorFilePath
             });
+        }
+
+        function postProcessJs(inputFile, code) {
+            // Select a module name, which will be similar to the file name without file extension.
+            // Application files have no prefix
+            // Package files get {package-name}/ as prefix
+            let module = filePrefix + inputFile.getPathInPackage().slice(0, -3);
+
+            // Strip the source map reference - Meteor handles assigning source maps internally
+            code = code.replace(/^\/\/# sourceMappingURL=.*$/m, "");
+
+            // Add module name to SystemJS output
+            code = code.replace(/^System\.register\(\[/m, "System.register(\"" + module + "\", [");
+
+            return code;
+        }
+
+        function postProcessSourceMap(inputFile, encodedSourceMap) {
+            // Embed the input file into the source map (with the path suggested by Meteor's build
+            // system), because Meteor won't serve the original .ts files to the browser.
+            let sourceMap = JSON.parse(encodedSourceMap);
+            sourceMap.sourceContent = [inputFile.getContentsAsString()];
+            sourceMap.sources = [inputFile.getDisplayPath()];
+            return sourceMap;
         }
 
         function loadPackageConfig() {
             let suggestedOptions = {
                 charset: "utf8",
-                preverseConstEnums: true
+                preverseConstEnums: true,
+                module: ts.ModuleKind.SystemJS
             };
 
             let enforcedOptions = {
@@ -276,7 +303,6 @@ class TSCompiler {
                 inlineSourceMap: false,
                 inlineSources: false,
                 mapRoot: filePrefix,
-                module: ts.ModuleKind.CommonJS,
                 sourceMap: true,
                 noEmit: false,
                 noEmitHelpers: false,
@@ -296,12 +322,10 @@ class TSCompiler {
         }
 
         function findScript(fileName) {
-            let meteorFile = allFiles[fileName];
             let contents;
 
-            if (meteorFile) {
-                // Use Meteor-provided script
-                contents = meteorFile.getContentsAsString();
+            if (allFiles[fileName]) {
+                contents = allFiles[fileName].getContentsAsString();
             }
             else {
                 // Read script from disk
