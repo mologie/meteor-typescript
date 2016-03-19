@@ -3,47 +3,69 @@
 // Refer to COPYING for license information.
 
 // TODO:
-// read the compiler output and figure out how well it integrates with Meteor
-//  do we need bare=true? i say yes, because TypeScript does its own clusure thing
-// write/test export support
-// update readme, explain how this is not the big other typescript compiler plugin
-//  faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
-//  file types (TS, JS), source map support
-// document that export = null is required for switching to local scope mode
-// update changelog
 // implement serializing/deserializing document cache
+// update readme, explain how this is not the big other typescript compiler plugin
+//  - faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
+//    file types (TS, JS), source map support
+//  - document that export = null is required for switching to local scope mode
+// update changelog
 
-var fs = Plugin.fs;
-var path = Plugin.path;
-var ts = Npm.require("typescript");
+var fs     = Plugin.fs;
+var path   = Plugin.path;
+var meteor = this;
+var ts     = Npm.require("typescript");
 var crypto = Npm.require("crypto");
-var _ = Npm.require("lodash");
+var _      = Npm.require("lodash");
+
+// Meteor will recreate an instance of TSCompiler each time the application is rebuilt.
+// In order to persist the AST cache across rebuilds in memory, a reference to the AST cache is
+// stored with the global context.
+function acquireDocumentRegistry(token) {
+    let cache = meteor.__typescriptCache;
+    if (cache && cache.__meteorToken == token) {
+        console.log("TypeScript: Using AST cache from previous build");
+        return cache;
+    }
+    meteor.__typescriptCache = ts.createDocumentRegistry();
+    meteor.__typescriptCache.__meteorToken = token;
+    return meteor.__typescriptCache;
+}
 
 class TSCompiler {
     constructor() {
-        // Shared cache
         this.archCache = {};
-        this.documentRegistry = ts.createDocumentRegistry();
+        this.documentRegistry = null;
     }
 
     setDiskCacheDirectory(diskCache) {
         // Meteor calls setDiskCacheDirectory immediately after creating the TSCompiler class.
         // Some Meteor plugins have the same check, so this will probably last.
-        if (this.diskCache)
+        if (this.diskCache) {
             throw Error("setDiskCacheDirectory called twice");
+        }
         this.diskCache = diskCache;
         this.loadDocumentCache();
     }
 
     loadDocumentCache() {
-        // TODO
+        // Reuse the previous AST cache if one is available. Minor hack: Meteor's disk cache path
+        // is used for testing if the AST cache should be invalidated. The disk cache path will
+        // change when this plugin updates or dependencies of the application change.
+        this.documentRegistry = acquireDocumentRegistry(this.diskCache);
+
+        // TODO populate documentRegistry from disk for faster startup
     }
 
     saveDocumentCache() {
-        // TODO
+        // TODO serialize documentRegistry to disk
     }
 
     processFilesForTarget(inputFiles) {
+        // Sanity check
+        if (!this.documentRegistry) {
+            throw Error("processFilesForTarget called before setDiskCacheDirectory");
+        }
+
         // Process each architecture
         let filesPerArch = _.groupBy(inputFiles, (file) => file.getArch());
         for (let arch of Object.keys(filesPerArch)) {
@@ -266,6 +288,15 @@ class TSCompiler {
         }
 
         function postProcessJs(inputFile, code) {
+            // Bail out if a file operates in global scope
+            if (code.indexOf("System.register") == -1) {
+                inputFile.error({
+                    message: "File does not have any import or export statement. Did you forget "
+                        + "to 'export default null'?"
+                });
+                return code;
+            }
+
             // Select a module name, which will be similar to the file name without file extension.
             // Application files have no prefix
             // Package files get {package-name}/ as prefix
@@ -293,7 +324,7 @@ class TSCompiler {
             let suggestedOptions = {
                 charset: "utf8",
                 preverseConstEnums: true,
-                module: ts.ModuleKind.SystemJS
+                module: ts.ModuleKind.System
             };
 
             let enforcedOptions = {
@@ -397,3 +428,5 @@ Plugin.registerCompiler({
 }, function () {
     return new TSCompiler();
 });
+
+/* vim: set ts=4 sw=4 sts=4 et : */
