@@ -16,24 +16,24 @@ var ts     = Npm.require("typescript");
 var crypto = Npm.require("crypto");
 var _      = Npm.require("lodash");
 
+const ENABLE_AGGRESSIVE_CACHING = false;
+
 // Meteor will recreate an instance of TSCompiler each time the application is rebuilt.
-// In order to persist the AST cache across rebuilds in memory, a reference to the AST cache is
-// stored with the global context.
-function acquireDocumentRegistry(token) {
+// In order to persist the cache across rebuilds in memory, a reference to the cache is  stored
+// with the global context.
+function acquireCache(token) {
     let cache = meteor.__typescriptCache;
-    if (cache && cache.__meteorToken == token) {
-        console.log("TypeScript: Using AST cache from previous build");
+    if (cache && (cache.token == token || ENABLE_AGGRESSIVE_CACHING)) {
         return cache;
     }
-    meteor.__typescriptCache = ts.createDocumentRegistry();
-    meteor.__typescriptCache.__meteorToken = token;
+    meteor.__typescriptCache = {};
+    meteor.__typescriptCache.token = token;
     return meteor.__typescriptCache;
 }
 
 class TSCompiler {
     constructor() {
-        this.archCache = {};
-        this.documentRegistry = null;
+        this.cache = null;
     }
 
     setDiskCacheDirectory(diskCache) {
@@ -47,10 +47,18 @@ class TSCompiler {
     }
 
     loadDocumentCache() {
-        // Reuse the previous AST cache if one is available. Minor hack: Meteor's disk cache path
-        // is used for testing if the AST cache should be invalidated. The disk cache path will
-        // change when this plugin updates or dependencies of the application change.
-        this.documentRegistry = acquireDocumentRegistry(this.diskCache);
+        // Reuse the previous cache if one is available. Minor hack: Meteor's disk cache path is
+        // is for testing if the cache should be invalidated. The disk cache path will change when
+        // this plugin updates or dependencies of the application change.
+        this.cache = acquireCache(this.diskCache);
+
+        // The document registry is TypeScript's AST cache
+        this.documentRegistry = (this.cache.documentRegistry
+            || (this.cache.documentRegistry = ts.createDocumentRegistry()));
+
+        // The arch cache is used for storing TypeScript program handles for even faster
+        // incremental compilation
+        this.archCache = (this.cache.archCache || (this.cache.archCache = {}));
 
         // TODO populate documentRegistry from disk for faster startup
     }
@@ -61,7 +69,7 @@ class TSCompiler {
 
     processFilesForTarget(inputFiles) {
         // Sanity check
-        if (!this.documentRegistry) {
+        if (!this.cache) {
             throw Error("processFilesForTarget called before setDiskCacheDirectory");
         }
 
@@ -290,8 +298,8 @@ class TSCompiler {
             // Bail out if a file operates in global scope
             if (code.indexOf("System.register") == -1) {
                 inputFile.error({
-                    message: "File does not have any import or export statement. Did you forget "
-                        + "to 'export default null'?"
+                    message: "File does not have a top-level import or export statement. "
+                        + "Did you forget to 'export default null'?"
                 });
                 return code;
             }
