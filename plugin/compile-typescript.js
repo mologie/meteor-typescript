@@ -3,7 +3,7 @@
 // Refer to COPYING for license information.
 
 // TODO:
-// implement serializing/deserializing document cache
+// implement serializing/deserializing document cache for faster startup
 // update readme, explain how this is not the big other typescript compiler plugin
 //  - faster, more up-to-date, minimalistic, input AST caching, package support, mixing different
 //    file types (TS, JS), source map support
@@ -36,7 +36,7 @@ class TSCompiler {
         // Reuse the previous cache if one is available. Minor hack: Meteor's disk cache path is
         // is for testing if the cache should be invalidated. The disk cache path will change when
         // this plugin updates or dependencies of the application change.
-        this.cache = acquireCache(this.diskCache);
+        this.cache = TSCompiler.acquireCache(this.diskCache);
         this.ts = (this.cache.ts || (this.cache.ts = Npm.require("typescript")));
         this.documentRegistry = (this.cache.documentRegistry
             || (this.cache.documentRegistry = this.ts.createDocumentRegistry()));
@@ -69,6 +69,8 @@ class TSCompiler {
     }
 
     processFilesForArch(arch, archCache, inputFiles) {
+        var ts = this.ts;
+
         // Grab and evaluate tsconfig.json from the application root
         // Embedded package will inherit settings from the application's tsconfig.json
         let tsconfig = {
@@ -79,11 +81,11 @@ class TSCompiler {
         if (configFiles.length > 0) {
             let configFile = configFiles[0];
             let configText = configFile.getContentsAsString();
-            let loadResult = this.ts.parseConfigFileTextToJson("tsconfig.json", configText);
+            let loadResult = ts.parseConfigFileTextToJson("tsconfig.json", configText);
 
             if (loadResult.error) {
                 let e = loadResult.error;
-                let message = this.ts.flattenDiagnosticMessageText(e.messageText, "\n");
+                let message = ts.flattenDiagnosticMessageText(e.messageText, "\n");
                 let { line, character } = e.file.getLineAndCharacterOfPosition(e.start);
                 configFile.error({
                     message: message,
@@ -95,8 +97,8 @@ class TSCompiler {
                 let unprocessedConfig = loadResult.config;
 
                 if (unprocessedConfig.compilerOptions) {
-                    tsconfig.compilerOptions = this.ts.convertCompilerOptionsFromJson(
-                        this.ts.optionDeclarations, unprocessedConfig.compilerOptions);
+                    tsconfig.compilerOptions = ts.convertCompilerOptionsFromJson(
+                        ts.optionDeclarations, unprocessedConfig.compilerOptions);
                 }
 
                 if (unprocessedConfig.files) {
@@ -131,6 +133,8 @@ class TSCompiler {
     }
 
     processFilesForPackage(packageName, packageCache, arch, inputFiles, allFiles, tsconfig) {
+        var ts = this.ts;
+
         // Heuristics for better embedded package support
         // By rebasing all paths into the package's real directory, referencing files outside of
         // the package becomes possible. Name conflicts between package files and application files
@@ -199,7 +203,7 @@ class TSCompiler {
             },
 
             getDefaultLibFileName: (options) => {
-                return Plugin.convertToStandardPath(this.ts.getDefaultLibFilePath(options));
+                return Plugin.convertToStandardPath(ts.getDefaultLibFilePath(options));
             },
 
             getCurrentDirectory: () => {
@@ -231,7 +235,7 @@ class TSCompiler {
         // Two different cache layers are applied here: TypeScript reuses parts of the old program
         // (if any), and the compiler host provides ASTs from the document registry if available.
         var oldProgram = packageCache.program || null;
-        var newProgram = this.ts.createProgram(rootFiles, newSettings, compilerHost, oldProgram);
+        var newProgram = ts.createProgram(rootFiles, newSettings, compilerHost, oldProgram);
 
         // Release files which are available in oldProgram but not in newProgram from the cache.
         // Logic from TypeScript's src/services/services.ts.
@@ -250,8 +254,7 @@ class TSCompiler {
 
         // Compile the package. The compiler host's writeFile method is called here.
         let emitResult = newProgram.emit();
-        let allDiagnostics =
-            this.ts.getPreEmitDiagnostics(newProgram).concat(emitResult.diagnostics);
+        let allDiagnostics = ts.getPreEmitDiagnostics(newProgram).concat(emitResult.diagnostics);
 
         // Complain if there are any errors
         allDiagnostics.forEach(logError);
@@ -314,12 +317,8 @@ class TSCompiler {
             let suggestedOptions = {
                 charset: "utf8",
                 preverseConstEnums: true,
-                module: this.ts.ModuleKind.System
+                module: ts.ModuleKind.System
             };
-
-            let enforcedTarget = (arch == "web.browser")
-                ? this.ts.ScriptTarget.ES3
-                : this.ts.ScriptTarget.ES5;
 
             let enforcedOptions = {
                 declaration: false,
@@ -334,12 +333,12 @@ class TSCompiler {
                 noEmitOnError: true,
                 out: undefined,
                 outFile: undefined,
-                target: enforcedTarget
+                target: (arch == "web.browser") ? ts.ScriptTarget.ES3 : ts.ScriptTarget.ES5
             };
 
             return _.assign(
                 {},
-                this.ts.getDefaultCompilerOptions(),
+                ts.getDefaultCompilerOptions(),
                 suggestedOptions,
                 tsconfig.compilerOptions,
                 enforcedOptions
@@ -370,7 +369,7 @@ class TSCompiler {
             let version = crypto.createHash("sha1").update(contents).digest("hex");
 
             return {
-                snapshot: this.ts.ScriptSnapshot.fromString(contents),
+                snapshot: ts.ScriptSnapshot.fromString(contents),
                 version: version
             };
         }
@@ -379,7 +378,7 @@ class TSCompiler {
             // Small inconvenience: Meteor wants us to assign errors to inputFile objects, but
             // that's really not always possible. TypeScript files may reference arbitrary files on
             // the file system (at least lib.d.ts). Throw an ugly error in such cases.
-            let message = this.ts.flattenDiagnosticMessageText(e.messageText, "\n");
+            let message = ts.flattenDiagnosticMessageText(e.messageText, "\n");
             if (e.file) {
                 let { line, character } = e.file.getLineAndCharacterOfPosition(e.start);
                 let inputFile = allFiles[e.file.fileName];
