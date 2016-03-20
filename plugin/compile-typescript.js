@@ -85,7 +85,7 @@ class TSCompiler {
         });
 
         // Grab and evaluate tsconfig.json from the application root
-        // Embedded package will inherit settings from the application's tsconfig.json
+        // Embedded packages will inherit settings from the application's tsconfig.json
         let tsconfig = {
             compilerOptions: {},
             files: [],
@@ -132,7 +132,7 @@ class TSCompiler {
                         if (fileName.startsWith("server/") || fileName.startsWith("client/")) {
                             if (!fs.existsSync(fileName)) {
                                 configFile.error({
-                                    message: "Explicitly referenced file '" + fileName + "' doees "
+                                    message: "Explicitly referenced file '" + fileName + "' does "
                                         + "not exist."
                                 });
                             }
