@@ -88,7 +88,8 @@ class TSCompiler {
         // Embedded package will inherit settings from the application's tsconfig.json
         let tsconfig = {
             compilerOptions: {},
-            files: []
+            files: [],
+            exclude: []
         };
         let configFiles = inputFiles.filter(TSCompiler.isConfigFile);
         if (configFiles.length > 0) {
@@ -149,6 +150,11 @@ class TSCompiler {
                         return false;
                     });
                 }
+
+                if (unprocessedConfig.exclude) {
+                    // XXX Check that all to-be-excluded files exist here?
+                    tsconfig.exclude = unprocessedConfig.exclude;
+                }
             }
         }
 
@@ -182,11 +188,27 @@ class TSCompiler {
         let friendlyPackageName = packageName ? `package ${packageName}` : "application";
 
         // Collect files which need compiling
+        var excludedFilesIndex = _.keyBy(tsconfig.exclude, _.identity);
         var rootFiles = [].concat(tsconfig.files);
         inputFiles.forEach((file) => {
-            if (!TSCompiler.isDefinitionFile(file) && !TSCompiler.isConfigFile(file)) {
-                rootFiles.push(filePrefix + file.getPathInPackage());
+            // Don't compile tsconfig.json
+            if (TSCompiler.isConfigFile(file)) {
+                return;
             }
+
+            // Don't compile files in or under tsconfig.json's excluded files/directories
+            // XXX This will break when TypeScript adds globs to tsconfig.json, see
+            //     https://github.com/Microsoft/TypeScript/issues/1927
+            let fileName = filePrefix + file.getPathInPackage();
+            let fileComponents = fileName.split("/");
+            for (let i = 0; i < fileComponents.length; i++) {
+                if (fileComponents.slice(0, i + 1).join("/") in excludedFilesIndex) {
+                    // File or the file's directory have been excluded
+                    return;
+                }
+            }
+
+            rootFiles.push(fileName);
         });
 
         // Process configuration
