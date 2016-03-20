@@ -56,6 +56,8 @@ class TSCompiler {
         }
 
         // Process each architecture
+        // XXX Currently, this is redundant, because processFilesForTarget is called once for each
+        // architecture.
         let filesPerArch = _.groupBy(inputFiles, (file) => file.getArch());
         for (let arch of Object.keys(filesPerArch)) {
             if (!(arch in this.archCache)) {
@@ -71,6 +73,17 @@ class TSCompiler {
     processFilesForArch(arch, archCache, inputFiles) {
         var ts = this.ts;
 
+        // File index for reverse lookups
+        var allFiles = _.keyBy(inputFiles, (file) => {
+            let packageName = file.getPackageName();
+            let buildingEmbeddedPackage = packageName && fs.existsSync("packages/" + packageName);
+            var filePrefix = "";
+            if (buildingEmbeddedPackage) {
+                filePrefix = "packages/" + packageName + "/";
+            }
+            return filePrefix + file.getPathInPackage();
+        });
+
         // Grab and evaluate tsconfig.json from the application root
         // Embedded package will inherit settings from the application's tsconfig.json
         let tsconfig = {
@@ -79,7 +92,7 @@ class TSCompiler {
         };
         let configFiles = inputFiles.filter(TSCompiler.isConfigFile);
         if (configFiles.length > 0) {
-            let configFile = configFiles[0];
+            var configFile = configFiles[0];
             let configText = configFile.getContentsAsString();
             let loadResult = ts.parseConfigFileTextToJson("tsconfig.json", configText);
 
@@ -102,22 +115,42 @@ class TSCompiler {
                 }
 
                 if (unprocessedConfig.files) {
-                    // XXX It may cause trouble to allow the user to load arbitrary files here
-                    tsconfig.files = unprocessedConfig.files;
+                    // Add all definition files from tsconfig.json to the compiliation context
+                    // This allows omitting a project-wide reference line which would otherwise be
+                    // required for each file, while at the same time making editors that depend on
+                    // tsconfig.json happy.
+                    tsconfig.files = unprocessedConfig.files.filter((fileName) => {
+                        // Test if the file is available in the current context (client or server)
+                        let inputFile = allFiles[fileName];
+                        if (inputFile) {
+                            return TSCompiler.isDefinitionFile(inputFile);
+                        }
+
+                        // Silently skip loading server-only scripts on the client and client-only
+                        // scripts on the server.
+                        if (fileName.startsWith("server/") || fileName.startsWith("client/")) {
+                            if (!fs.existsSync(fileName)) {
+                                configFile.error({
+                                    message: "Explicitly referenced file '" + fileName + "' doees "
+                                        + "not exist."
+                                });
+                            }
+                            return false;
+                        }
+
+                        // The file is not part of the Meteor directory. Assume that the user made
+                        // a mistake and complain accordingly.
+                        configFile.error({
+                            message: "Explicitly referenced file '" + fileName + "' was not "
+                                + "loaded through Meteor. If this was intentional, place a "
+                                + "symlink to the external file into your Meteor project "
+                                + "directory."
+                        });
+                        return false;
+                    });
                 }
             }
         }
-
-        // File index for reverse lookups
-        var allFiles = _.keyBy(inputFiles, (file) => {
-            let packageName = file.getPackageName();
-            let buildingEmbeddedPackage = packageName && fs.existsSync("packages/" + packageName);
-            var filePrefix = "";
-            if (buildingEmbeddedPackage) {
-                filePrefix = "packages/" + packageName + "/";
-            }
-            return filePrefix + file.getPathInPackage();
-        });
 
         // Process files per package
         // Meteor performs garbage collection automatically by destryoing TSCompiler if the list
