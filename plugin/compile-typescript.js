@@ -76,10 +76,9 @@ class TSCompiler {
         // File index for reverse lookups
         var allFiles = _.keyBy(inputFiles, (file) => {
             let packageName = file.getPackageName();
-            let buildingEmbeddedPackage = packageName && fs.existsSync("packages/" + packageName);
-            var filePrefix = "";
-            if (buildingEmbeddedPackage) {
-                filePrefix = "packages/" + packageName + "/";
+            let filePrefix = "";
+            if (packageName) {
+                filePrefix = "packages/" + packageName.replace(":", "/") + "/";
             }
             return filePrefix + file.getPathInPackage();
         });
@@ -178,10 +177,13 @@ class TSCompiler {
         // By rebasing all paths into the package's real directory, referencing files outside of
         // the package becomes possible. Name conflicts between package files and application files
         // are avoided.
-        let buildingEmbeddedPackage = packageName && fs.existsSync("packages/" + packageName);
-        var filePrefix = "";
-        if (buildingEmbeddedPackage) {
-            filePrefix = "packages/" + packageName + "/";
+        if (packageName) {
+            let packageFileName = packageName.replace(":", "_");
+            var filePrefix = "packages/" + packageFileName + "/";
+            var modulePrefix = "/_modules_/packages/" + packageFileName + "/";
+        } else {
+            var filePrefix = "";
+            var modulePrefix = "/_modules_/app/";
         }
 
         // For log messages
@@ -325,13 +327,24 @@ class TSCompiler {
             }
 
             // Drop the packages/<name>/ prefix
-            let meteorFilePath = inputFile.getPathInPackage().slice(0, -3) + ".js";
+            let generatedFileName = inputFile.getPathInPackage().slice(0, -3) + ".js";
+
+            // Get ES3/5 compiler output
+            let data = postProcessJs(inputFile, compilerOutput[compiledFileName]);
+
+            // Get source map
+            let sourceMap = compilerOutput[sourceMapFileName];
+            if (sourceMap) {
+                sourceMap = JSON.parse(sourceMap);
+                sourceMap.generatedFile = "/" + generatedFileName;
+                sourceMap.sources = [inputFile.getDisplayPath()];
+            }
 
             inputFile.addJavaScript({
-                bare: true,
-                data: postProcessJs(inputFile, compilerOutput[compiledFileName]),
-                sourceMap: postProcessSourceMap(inputFile, compilerOutput[sourceMapFileName]),
-                path: meteorFilePath
+                sourcePath: inputFile.getPathInPackage(),
+                path: generatedFileName,
+                data,
+                sourceMap,
             });
         }
 
@@ -345,27 +358,17 @@ class TSCompiler {
                 return code;
             }
 
-            // Select a module name, which will be similar to the file name without file extension.
-            // Application files have no prefix
-            // Package files get {package-name}/ as prefix
-            let module = filePrefix + inputFile.getPathInPackage().slice(0, -3);
+            // Select a module ID
+            // The _module_ prefix is required for integration with universe:modules
+            let moduleId = modulePrefix + inputFile.getPathInPackage().slice(0, -3);
 
             // Strip the source map reference - Meteor handles assigning source maps internally
             code = code.replace(/^\/\/# sourceMappingURL=.*$/m, "");
 
             // Add module name to SystemJS output
-            code = code.replace(/^System\.register\(\[/m, "System.register(\"" + module + "\", [");
+            code = code.replace(/^System\.register\(\[/m, `System.register("${moduleId}", [`);
 
             return code;
-        }
-
-        function postProcessSourceMap(inputFile, encodedSourceMap) {
-            // Embed the input file into the source map (with the path suggested by Meteor's build
-            // system), because Meteor won't serve the original .ts files to the browser.
-            let sourceMap = JSON.parse(encodedSourceMap);
-            sourceMap.sourceContent = [inputFile.getContentsAsString()];
-            sourceMap.sources = [inputFile.getDisplayPath()];
-            return sourceMap;
         }
 
         function loadPackageConfig() {
@@ -380,8 +383,8 @@ class TSCompiler {
                 diagnostics: true,
                 emitBOM: false,
                 inlineSourceMap: false,
-                inlineSources: false,
-                mapRoot: filePrefix,
+                inlineSources: true,
+                mapRoot: "",
                 sourceMap: true,
                 noEmit: false,
                 noEmitHelpers: false,
@@ -419,7 +422,7 @@ class TSCompiler {
             }
 
             // Use a custom checksum for synchronization of the Meteor file cache and of files read
-            // from disk on demand. We unfortunately cannot rely on meteorFile.getSourceHash()
+            // from disk on demand. We unfortunately cannot rely on inputFile.getSourceHash()
             // because its algorithm is not documented.
             let version = crypto.createHash("sha1").update(contents).digest("hex");
 
