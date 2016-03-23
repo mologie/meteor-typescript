@@ -177,13 +177,10 @@ class TSCompiler {
         // By rebasing all paths into the package's real directory, referencing files outside of
         // the package becomes possible. Name conflicts between package files and application files
         // are avoided.
+        var filePrefix = "";
         if (packageName) {
             let packageFileName = packageName.replace(":", "_");
-            var filePrefix = "packages/" + packageFileName + "/";
-            var modulePrefix = "/_modules_/packages/" + packageFileName + "/";
-        } else {
-            var filePrefix = "";
-            var modulePrefix = "/_modules_/app/";
+            filePrefix = "packages/" + packageFileName + "/";
         }
 
         // For log messages
@@ -349,8 +346,12 @@ class TSCompiler {
         }
 
         function postProcessJs(inputFile, code) {
-            // Bail out if a file operates in global scope
-            if (code.indexOf("System.register") == -1) {
+            // Heuristics for providing a more helpful error message than TypeScript's default
+            // 'duplicate identifier' errors which may occur when not using any import or export
+            // statements.
+            // XXX Remove this test once TypeScript provides a compiler option which controls the
+            // default scope of files.
+            if (code.indexOf("exports.") == -1 && code.indexOf("require(") == -1) {
                 inputFile.error({
                     message: "File does not have a top-level import or export statement. "
                         + "Did you forget to 'export default null'?"
@@ -358,15 +359,8 @@ class TSCompiler {
                 return code;
             }
 
-            // Select a module ID
-            // The _module_ prefix is required for integration with universe:modules
-            let moduleId = modulePrefix + inputFile.getPathInPackage().slice(0, -3);
-
-            // Strip the source map reference - Meteor handles assigning source maps internally
+            // Strip the source map reference - Meteor assigns source maps using HTTP headers
             code = code.replace(/^\/\/# sourceMappingURL=.*$/m, "");
-
-            // Add module name to SystemJS output
-            code = code.replace(/^System\.register\(\[/m, `System.register("${moduleId}", [`);
 
             return code;
         }
@@ -375,7 +369,7 @@ class TSCompiler {
             let suggestedOptions = {
                 charset: "utf8",
                 preverseConstEnums: true,
-                module: ts.ModuleKind.System
+                module: ts.ModuleKind.CommonJS
             };
 
             let enforcedOptions = {
