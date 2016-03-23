@@ -77,7 +77,7 @@ Meteor.startup(function () {
 ```
 
 ```js
-// File: server/entrypoint.js
+// File: server/main.js
 Meteor.startup(function () {
     require("../imports/server/index");
     console.log("Application server started");
