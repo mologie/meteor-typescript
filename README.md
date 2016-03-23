@@ -5,53 +5,87 @@ TypeScript for Meteor
 
 This package provides TypeScript support for Meteor. It features various caching mechanisms which enable fast incremental builds.
 
-*Bundled TypeScript version: 1.4.1*
+*Bundled TypeScript version: 1.8.9*
 
-**Here be dragons.** Although this package generally seem to work quite well, it has not been extensively tested. Please don't point fingers when things catch fire.
+**Here be dragons.** This package generally seem to work quite well, but please don't point fingers when things catch fire. Automated tests are missing.
 
+**Version 1.0.0 of this plugin is not backwards-compatible with previous versions.** Starting with version 1.0.0, TypeScript's module system is supported. Modules are no longer exported to the global scope.
+
+**This package is currently being updated for Meteor 1.3's CommonJS module system.** No syntax changes will be required. The Meteor 1.3 update will ship as minor update (1.1.0).
 
 Usage
 -----
 
 ### Installation
 
+Version 1.0.0-rc1 is currently not available on Atmosphere. You can install this release candidate by downloading it into your packages directory:
+
 ```
+mkdir packages
+cd packages
+git clone -b develop https://github.com/mologie/meteor-typescript.git
 meteor add mologie:typescript
 ```
 
-TypeScript is installed with this package. Once installed, Meteor will accept `.ts` files.
+Once installed, Meteor will accept `.ts` and `.tsx` files. All syntax-controlling `tsconfig.json` options are supported
 
 ### Using TypeScript
 
-Here are a few simple rules to make things play nicely with Meteor:
+This packages uses `universe:modules` for SystemJS support. TypeScript files are only run when referenced. Therefore, you will need an entry point on client and server. If `client/index.ts` was your client entry point, then your entry point file might look like this:
 
-* Do not use the `export` or `import` keyword in the top-level scope.
-* All moduels and classes (but not variables) declared in the top-level scope are automatically exported to the package/application scope.
-* Variables can be exported to the package/application scope by declaring them as part of the global context through TypeScript's `declare` keyword.
-* There are no implicit references. You must manually reference all files which your source file depends on.
+```js
+// File: client/entrypoint.js
+Meteor.startup(function () {
+    System.import("/client/index");
+});
+```
+
+Meteor currently eats exceptions thrown in promises on the server, so that printing a stack trace yourself is useful for debugging:
+
+```js
+// File: server/entrypoint.js
+Meteor.startup(function () {
+    System.import("/server/index").then(
+        function () {
+            console.log("Application started");
+        },
+        function (e) {
+            console.log("Application server crashed during startup :(");
+            if (e.stack) {
+                console.log("Stack trace:");
+                console.log(e.stack);
+            }
+            else {
+                console.log(e);
+            }
+        }
+    );
+});
+```
 
 ### TypeScript definitions
 
-This package does not ship with any TypeScript definition files. I maintain a Meteor-specific TypeScript definitions library over at [typescript-libs](//github.com/mologie/meteor-typescript-libs). The [DefinitelyTyped](http://definitelytyped.org) project is an excellent source for TypeScript definitions.
+This package does not ship with any TypeScript definition files. The [DefinitelyTyped](http://definitelytyped.org) project is an excellent source for TypeScript definitions. When using DefinitelyTyped's `typings` tool with Meteor, the following `tsconfig.json` will make this plugin, VS Code and Sublime Text properly load your definition files:
 
+```json
+{
+    "exclude": [
+        ".meteor",
+        "typings/browser",
+        "typings/browser.d.ts"
+    ]
+}
+```
 
 Known issues
 ------------
 
-* Changing a referenced file which is not part of your package or application does not trigger recompilation.
-* The error handling for invalid references is sloppy. It will always display a "file not found" error.
-* There are no test cases yet.
+* Meteor 1.2 occasionally delivers empty source maps.
+* There are no test cases.
+* There are no extensive examples yet, but people familiar with TypeScript should feel right at home.
 
 
 License
 -------
 
 This package is licensed under the [MIT license](/COPYING).
-
-
-Credits
--------
-
-This package uses code from various Meteor standard packages and Microsoft's TypeScript compiler API example code.
-
-Inspiration for this package comes from the [meteor-typescript project's plugin](//github.com/meteor-typescript/meteor-typescript-compiler) (MTP), which has been around since 2013. TypeScript has since added an official compiler API. Compared to MTP's plugin, *mologie:typescript* makes use of TypeScript's new API and various caching machanisms, resulting in performance above and beyond MTP's batch compilation approach while avoiding the pitfalls and cosmetic issues that come with batch compilation.
