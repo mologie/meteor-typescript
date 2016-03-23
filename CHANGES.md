@@ -2,12 +2,18 @@
 
 | Meteor        | TypeScript | Use compiler |
 | ------------- | ---------- | ------------ |
-| 1.2.0+        | 1.8.9      | 1.0.0        |
+| 1.3.0+        | 1.8.9      | 1.1.0-rc.1   |
+| 1.2.x         | 1.8.9      | 1.0.0-rc.1   |
 | 0.9 - 1.2.0   | 1.4.1      | 0.0.9        |
 
 # Changes
 
-### 1.0.0 (TypeScript 1.8.9)
+### 1.1.0.rc.1 (TypeScript 1.8.9)
+
+* Requires Meteor 1.3 or later
+* Switch from SystemJS to Meteor's built-in CommonJS loader
+
+### 1.0.0-rc.1 (TypeScript 1.8.9)
 
 * Rewrite for Meteor 1.2 build API
 * Uses TypeScript 1.8
