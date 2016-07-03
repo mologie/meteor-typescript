@@ -17,6 +17,16 @@ var _      = Npm.require("lodash");
 
 const ENABLE_AGGRESSIVE_CACHING = false; // ignore requests from Meteor to invalidate the cache
 
+function fileExists(path) {
+    try {
+        fs.statSync(path);
+        return true;
+    }
+    catch (err) {
+        return false;
+    }
+}
+
 class TSCompiler {
     constructor() {
         this.cache = null;
@@ -129,7 +139,7 @@ class TSCompiler {
                         // Silently skip loading server-only scripts on the client and client-only
                         // scripts on the server.
                         if (fileName.startsWith("server/") || fileName.startsWith("client/")) {
-                            if (!fs.existsSync(fileName)) {
+                            if (!fileExists(fileName)) {
                                 configFile.error({
                                     message: "Explicitly referenced file '" + fileName + "' does "
                                         + "not exist."
@@ -267,7 +277,7 @@ class TSCompiler {
             fileExists: (fileName) => {
                 // XXX Use of deprecated method
                 // Is this function required by the TypeScript compiler at all?
-                return !!allFiles[fileName] || fs.existsSync(fileName);
+                return !!allFiles[fileName] || fileExists(fileName);
             },
 
             writeFile: (fileName, data, writeByteOrderMark) => {
